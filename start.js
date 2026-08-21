@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات پیشرفته روبیکا - نسخه اصلاح‌شده بدون ارور sendCode
+//  ربات پیشرفته روبیکا - نسخه نهایی با ذخیره صحیح تنظیمات
 // ============================================================================
 
 import express from "express";
@@ -56,22 +56,48 @@ let config = {
 
 function loadConfig() {
   try {
-    if (fs.existsSync(CONFIG_PATH)) config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) };
+    if (fs.existsSync(CONFIG_PATH)) {
+      const loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+      config = { ...config, ...loaded };
+      log("info", "تنظیمات بارگذاری شد:", {
+        hasToken: !!config.rubikaToken,
+        hasApiId: !!config.tgApiId,
+        hasApiHash: !!config.tgApiHash,
+        hasPhone: !!config.tgPhone
+      });
+    }
     if (fs.existsSync(DATA_PATH)) {
       const data = JSON.parse(fs.readFileSync(DATA_PATH, "utf-8"));
       state.savedChannels = data.savedChannels || [];
     }
-  } catch (err) { log("error", "خطا در خواندن فایل‌ها:", err.message); }
+  } catch (err) { 
+    log("error", "خطا در خواندن فایل‌ها:", err.message); 
+  }
 }
 
 function saveConfig() {
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8"); return true; } 
-  catch (err) { log("error", "خطا در ذخیره تنظیمات:", err.message); return false; }
+  try {
+    const data = JSON.stringify(config, null, 2);
+    fs.writeFileSync(CONFIG_PATH, data, "utf-8");
+    log("info", "تنظیمات ذخیره شد:", {
+      hasToken: !!config.rubikaToken,
+      hasApiId: !!config.tgApiId,
+      hasApiHash: !!config.tgApiHash,
+      hasPhone: !!config.tgPhone
+    });
+    return true;
+  } catch (err) { 
+    log("error", "خطا در ذخیره تنظیمات:", err.message); 
+    return false; 
+  }
 }
 
 function saveData() {
-  try { fs.writeFileSync(DATA_PATH, JSON.stringify({ savedChannels: state.savedChannels }, null, 2), "utf-8"); } 
-  catch (err) { log("error", "خطا در ذخیره داده‌ها:", err.message); }
+  try { 
+    fs.writeFileSync(DATA_PATH, JSON.stringify({ savedChannels: state.savedChannels }, null, 2), "utf-8"); 
+  } catch (err) { 
+    log("error", "خطا در ذخیره داده‌ها:", err.message); 
+  }
 }
 
 function saveTgSession() {
@@ -79,7 +105,9 @@ function saveTgSession() {
     if (state.tgClient) {
       fs.writeFileSync(SESSION_PATH, JSON.stringify({ session: state.tgClient.session.save() }, "utf-8"));
     }
-  } catch (err) { log("error", "خطا در ذخیره سشن تلگرام:", err.message); }
+  } catch (err) { 
+    log("error", "خطا در ذخیره سشن تلگرام:", err.message); 
+  }
 }
 
 loadConfig();
@@ -140,11 +168,11 @@ async function sendMediaToRubika(chatId, buffer, type, caption = "") {
 }
 
 // ----------------------------------------------------------------------------
-// ✅ اصلاح شده: مدیریت کلاینت تلگرام با چک کامل
+// مدیریت کلاینت تلگرام
 // ----------------------------------------------------------------------------
 async function initTgClient() {
   if (!config.tgApiId || !config.tgApiHash) {
-    throw new Error("تنظیمات تلگرام (API ID و API Hash) کامل نیست. لطفاً ابتدا تنظیمات را ذخیره کنید.");
+    throw new Error("تنظیمات تلگرام کامل نیست. لطفاً API ID و API Hash را وارد و ذخیره کنید.");
   }
   
   state.tgConnecting = true;
@@ -176,7 +204,6 @@ async function initTgClient() {
   }
 }
 
-// ✅ تابع جدید: اطمینان از وجود کلاینت
 async function ensureTgClient() {
   if (!state.tgClient) {
     log("info", "کلاینت تلگرام وجود ندارد، در حال ساخت...");
@@ -184,7 +211,7 @@ async function ensureTgClient() {
   }
   
   if (!state.tgClient) {
-    throw new Error("کلاینت تلگرام ساخته نشد. لطفاً تنظیمات را بررسی کنید.");
+    throw new Error("کلاینت تلگرام ساخته نشد.");
   }
   
   return state.tgClient;
@@ -192,7 +219,12 @@ async function ensureTgClient() {
 
 async function sendTgCodeFromWeb(phone) {
   try {
-    // ✅ اطمینان از وجود کلاینت
+    log("info", "بررسی تنظیمات تلگرام:", {
+      apiId: config.tgApiId,
+      apiHash: config.tgApiHash ? '***' : '',
+      phone: config.tgPhone
+    });
+
     const client = await ensureTgClient();
     
     log("info", `ارسال کد به شماره: ${phone}`);
@@ -441,7 +473,7 @@ async function handleTextMessage(chatId, text) {
 
   if (trimmedText === "/start" || trimmedText === "🏠 منوی اصلی") {
     if (!state.isTgLoggedIn) {
-      await sendMessage(chatId, "⚠️ ابتدا باید از پنل وب به تلگرام متصل شوید.\n\nلطفاً به سایت مراجعه کنید.", mainMenu);
+      await sendMessage(chatId, "⚠️ ابتدا باید از پنل وب به تلگرام متصل شوید.", mainMenu);
     } else {
       state.userStates[chatId] = { step: 'idle' };
       await sendMessage(chatId, "👋 خوش آمدید!\n\nاز دکمه‌ها یا دستورات استفاده کنید:", mainMenu);
@@ -501,7 +533,6 @@ async function handleTextMessage(chatId, text) {
   }
   else if (userState.step === 'waiting_for_tg_channel_link') {
     const link = trimmedText;
-    const tgChannel = userState.selectedChannel;
 
     try {
       const username = link.replace(/https?:\/\/t\.me\//, '').replace('/', '');
@@ -603,13 +634,30 @@ app.use(express.json());
 
 app.get("/", (req, res) => res.setHeader("Content-Type", "text/html; charset=utf-8").send(renderAdminPage()));
 
+// ✅ API جدید: نمایش تنظیمات فعلی (برای دیباگ)
+app.get("/api/debug", (req, res) => {
+  res.json({
+    config: {
+      hasRubikaToken: !!config.rubikaToken,
+      tgApiId: config.tgApiId || 'خالی',
+      hasTgApiHash: !!config.tgApiHash,
+      tgPhone: config.tgPhone || 'خالی'
+    },
+    state: {
+      isTgLoggedIn: state.isTgLoggedIn,
+      tgClientExists: !!state.tgClient,
+      codeSent: state.codeSent
+    }
+  });
+});
+
 app.get("/api/status", (req, res) => {
   res.json({
     running: state.running, 
     messageCount: state.messageCount, 
     lastError: state.lastError,
     hasRubikaToken: Boolean(config.rubikaToken),
-    hasTgConfig: Boolean(config.tgApiId && config.tgApiHash && config.tgPhone),
+    hasTgConfig: Boolean(config.tgApiId && config.tgApiHash),
     isTgLoggedIn: state.isTgLoggedIn, 
     tgConnecting: state.tgConnecting,
     codeSent: state.codeSent
@@ -618,11 +666,38 @@ app.get("/api/status", (req, res) => {
 
 app.post("/api/config", (req, res) => {
   const { rubikaToken, tgApiId, tgApiHash, tgPhone } = req.body || {};
-  if (rubikaToken) config.rubikaToken = rubikaToken.trim();
-  if (tgApiId) config.tgApiId = tgApiId.trim();
-  if (tgApiHash) config.tgApiHash = tgApiHash.trim();
-  if (tgPhone) config.tgPhone = tgPhone.trim();
-  res.json({ ok: saveConfig(), message: "تنظیمات ذخیره شد." });
+  
+  log("info", "دریافت تنظیمات:", {
+    hasToken: !!rubikaToken,
+    apiId: tgApiId,
+    hasHash: !!tgApiHash,
+    phone: tgPhone
+  });
+  
+  // ✅ آپدیت مستقیم config
+  if (rubikaToken !== undefined) config.rubikaToken = rubikaToken.trim();
+  if (tgApiId !== undefined) config.tgApiId = tgApiId.trim();
+  if (tgApiHash !== undefined) config.tgApiHash = tgApiHash.trim();
+  if (tgPhone !== undefined) config.tgPhone = tgPhone.trim();
+  
+  const saved = saveConfig();
+  
+  log("info", "تنظیمات نهایی:", {
+    hasToken: !!config.rubikaToken,
+    apiId: config.tgApiId,
+    hasHash: !!config.tgApiHash,
+    phone: config.tgPhone
+  });
+  
+  res.json({ 
+    ok: saved, 
+    message: saved ? "تنظیمات ذخیره شد." : "خطا در ذخیره",
+    debug: {
+      hasToken: !!config.rubikaToken,
+      apiId: config.tgApiId,
+      hasHash: !!config.tgApiHash
+    }
+  });
 });
 
 app.post("/api/send-code", async (req, res) => {
@@ -632,9 +707,21 @@ app.post("/api/send-code", async (req, res) => {
       return res.status(400).json({ success: false, message: "شماره تلفن الزامی است" });
     }
     
-    // ✅ چک کن تنظیمات تلگرام کامل باشه
+    log("info", "درخواست ارسال کد:", {
+      phone,
+      configApiId: config.tgApiId,
+      hasApiHash: !!config.tgApiHash
+    });
+    
     if (!config.tgApiId || !config.tgApiHash) {
-      return res.status(400).json({ success: false, message: "ابتدا API ID و API Hash را وارد و ذخیره کنید" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "ابتدا API ID و API Hash را وارد و ذخیره کنید",
+        debug: {
+          apiId: config.tgApiId || 'خالی',
+          hasHash: !!config.tgApiHash
+        }
+      });
     }
     
     config.tgPhone = phone.trim();
@@ -735,6 +822,7 @@ function renderAdminPage() {
   #toast.error { border-color: var(--red); }
   .hidden { display: none; }
   .alert-box { background: rgba(234,179,8,0.1); border: 1px solid var(--yellow); border-radius: 8px; padding: 12px; margin-bottom: 14px; color: var(--yellow); font-size: 13px; }
+  .debug-box { background: #0b1220; padding: 10px; border-radius: 8px; margin-top: 10px; font-size: 12px; font-family: monospace; }
 </style>
 </head>
 <body>
@@ -757,6 +845,7 @@ function renderAdminPage() {
     <label>API Hash تلگرام</label>
     <input id="tgApiHash" type="text" placeholder="کاراکترهای API Hash" />
     <button class="btn-primary" onclick="saveConfig()" style="width:100%">💾 ذخیره تنظیمات</button>
+    <div id="debugInfo" class="debug-box"></div>
   </div>
 
   <div class="card" id="loginCard">
@@ -801,18 +890,39 @@ function renderAdminPage() {
 
   async function saveConfig() {
     try {
+      const data = {
+        rubikaToken: document.getElementById('rubikaToken').value,
+        tgApiId: document.getElementById('tgApiId').value,
+        tgApiHash: document.getElementById('tgApiHash').value
+      };
+      
+      console.log('ارسال تنظیمات:', data);
+      
       const res = await fetch('/api/config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rubikaToken: document.getElementById('rubikaToken').value,
-          tgApiId: document.getElementById('tgApiId').value,
-          tgApiHash: document.getElementById('tgApiHash').value
-        })
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
       });
-      const data = await res.json();
-      showToast(data.message, data.ok);
+      const result = await res.json();
+      
+      console.log('پاسخ سرور:', result);
+      
+      showToast(result.message, result.ok);
+      
+      // ✅ نمایش اطلاعات دیباگ
+      if (result.debug) {
+        document.getElementById('debugInfo').innerHTML = \`
+          <div>✅ توکن: \${result.debug.hasToken ? 'دارد' : 'ندارد'}</div>
+          <div>✅ API ID: \${result.debug.apiId || 'خالی'}</div>
+          <div>✅ API Hash: \${result.debug.hasHash ? 'دارد' : 'ندارد'}</div>
+        \`;
+      }
+      
       refreshStatus();
-    } catch (e) { showToast('خطا: ' + e.message, false); }
+    } catch (e) { 
+      console.error('خطا:', e);
+      showToast('خطا: ' + e.message, false); 
+    }
   }
 
   async function sendCode() {
@@ -829,6 +939,8 @@ function renderAdminPage() {
       });
       const data = await res.json();
       
+      console.log('پاسخ send-code:', data);
+      
       if (data.success) {
         showToast('✅ کد ارسال شد! تلگرام را چک کنید', true);
         document.getElementById('loginStep1').classList.add('hidden');
@@ -836,8 +948,14 @@ function renderAdminPage() {
         document.getElementById('tgCode').focus();
       } else {
         showToast('❌ خطا: ' + data.message, false);
+        if (data.debug) {
+          console.error('اطلاعات دیباگ:', data.debug);
+        }
       }
-    } catch (e) { showToast('خطا: ' + e.message, false); }
+    } catch (e) { 
+      console.error('خطا:', e);
+      showToast('خطا: ' + e.message, false); 
+    }
   }
 
   async function resendCode() {
