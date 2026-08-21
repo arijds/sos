@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات دانلودر تلگرام برای روبیکا  —  نسخه اصلاح‌شده
+//  ربات دانلودر تلگرام برای روبیکا  —  نسخه با دکمه‌های reply_keyboard
 // ============================================================================
 
 import express from "express";
@@ -98,7 +98,12 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
 async function sendMessage(chatId, text, keyboard = null) {
   const body = { chat_id: String(chatId), text };
   if (keyboard) {
-    body.reply_markup = JSON.stringify({ inline_keyboard: keyboard });
+    // استفاده از reply_keyboard برای روبیکا
+    body.reply_markup = JSON.stringify({ 
+      keyboard: keyboard,
+      resize_keyboard: true,
+      one_time_keyboard: false
+    });
   }
   return rubikaCall("sendMessage", body);
 }
@@ -206,7 +211,8 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
     await sendMessage(chatId, "✅ ارسال پیام‌ها تمام شد!");
     
     if (!isFast) {
-      const kb = [[{ text: "💾 ذخیره این چنل", callback_data: `save:${channelLink}|${entity.title}` }]];
+      const kb = [["💾 ذخیره این چنل"], ["🏠 منوی اصلی"]];
+      state.userStates[chatId] = { step: 'ask_save', link: channelLink, name: entity.title };
       await sendMessage(chatId, "آیا مایل به ذخیره این چنل هستید؟", kb);
     }
   } catch (err) {
@@ -219,9 +225,9 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
 // ----------------------------------------------------------------------------
 function getMainMenu() {
   return [
-    [{ text: "🔍 جستجو در چنل", callback_data: "menu:search" }],
-    [{ text: "⚡ دانلود سریع (همه)", callback_data: "menu:fast" }],
-    [{ text: "💾 چنل‌های ذخیره شده", callback_data: "menu:saved" }]
+    ["🔍 جستجو در چنل"],
+    ["⚡ دانلود سریع (همه)"],
+    ["💾 چنل‌های ذخیره شده"]
   ];
 }
 
@@ -229,48 +235,50 @@ async function showMainMenu(chatId) {
   await sendMessage(chatId, "🏠 منوی اصلی:", getMainMenu());
 }
 
-async function handleCallback(chatId, data) {
-  if (data === "menu:search") {
-    state.userStates[chatId] = { step: 'waiting_for_link', action: 'search' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)");
-  } 
-  else if (data === "menu:fast") {
-    state.userStates[chatId] = { step: 'waiting_for_link', action: 'fast' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:");
-  } 
-  else if (data === "menu:saved") {
-    if (state.savedChannels.length === 0) return sendMessage(chatId, "💾 لیست خالی است.");
-    let text = "💾 چنل‌های ذخیره شده:\n\n";
-    const kb = [];
-    state.savedChannels.forEach((ch, i) => {
-      text += `${i + 1}. ${ch.name}\n`;
-      kb.push([{ text: `🔍 ${ch.name}`, callback_data: `saved_go:${ch.link}` }]);
-    });
-    await sendMessage(chatId, text, kb);
-  } 
-  else if (data.startsWith("save:")) {
-    const [, info] = data.split(":");
-    const [link, name] = info.split("|");
-    if (!state.savedChannels.find(c => c.link === link)) {
-      state.savedChannels.push({ link, name });
-      saveData();
-      await sendMessage(chatId, "✅ ذخیره شد!");
-    } else {
-      await sendMessage(chatId, "⚠️ قبلاً ذخیره شده.");
-    }
-    await showMainMenu(chatId);
-  }
-  else if (data.startsWith("saved_go:")) {
-    const link = data.replace("saved_go:", "");
-    state.userStates[chatId] = { step: 'waiting_for_count', link };
-    await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (عدد بفرست)");
-  }
-}
-
 async function handleTextMessage(chatId, text) {
   const userState = state.userStates[chatId];
 
-  if (userState?.step === 'waiting_for_tg_code') {
+  // مدیریت دکمه‌های منوی اصلی
+  if (text === "🔍 جستجو در چنل") {
+    state.userStates[chatId] = { step: 'waiting_for_link', action: 'search' };
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)", [["🏠 منوی اصلی"]]);
+  } 
+  else if (text === "⚡ دانلود سریع (همه)") {
+    state.userStates[chatId] = { step: 'waiting_for_link', action: 'fast' };
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:", [["🏠 منوی اصلی"]]);
+  } 
+  else if (text === "💾 چنل‌های ذخیره شده") {
+    if (state.savedChannels.length === 0) {
+      await sendMessage(chatId, "💾 لیست خالی است.", getMainMenu());
+      return;
+    }
+    let msgText = "💾 چنل‌های ذخیره شده:\n\n";
+    const kb = [];
+    state.savedChannels.forEach((ch, i) => {
+      msgText += `${i + 1}. ${ch.name}\n`;
+      kb.push([`🔍 ${ch.name}`]);
+    });
+    kb.push(["🏠 منوی اصلی"]);
+    state.userStates[chatId] = { step: 'showing_saved' };
+    await sendMessage(chatId, msgText, kb);
+  } 
+  else if (text === "🏠 منوی اصلی") {
+    delete state.userStates[chatId];
+    await showMainMenu(chatId);
+  }
+  else if (text === "💾 ذخیره این چنل") {
+    if (userState?.step === 'ask_save') {
+      if (!state.savedChannels.find(c => c.link === userState.link)) {
+        state.savedChannels.push({ link: userState.link, name: userState.name });
+        saveData();
+        await sendMessage(chatId, "✅ ذخیره شد!", getMainMenu());
+      } else {
+        await sendMessage(chatId, "⚠️ قبلاً ذخیره شده.", getMainMenu());
+      }
+      delete state.userStates[chatId];
+    }
+  }
+  else if (userState?.step === 'waiting_for_tg_code') {
     await verifyTgCode(chatId, text.trim());
   } 
   else if (userState?.step === 'waiting_for_link') {
@@ -278,17 +286,30 @@ async function handleTextMessage(chatId, text) {
     if (userState.action === 'fast') {
       delete state.userStates[chatId];
       await fetchAndSend(chatId, userState.link, 50, true);
+      await showMainMenu(chatId);
     } else {
       userState.step = 'waiting_for_count';
-      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)");
+      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)", [["🏠 منوی اصلی"]]);
     }
   } 
   else if (userState?.step === 'waiting_for_count') {
     const count = parseInt(text);
-    if (isNaN(count) || count < 1) return sendMessage(chatId, "❌ عدد معتبر وارد کنید.");
+    if (isNaN(count) || count < 1) {
+      await sendMessage(chatId, "❌ عدد معتبر وارد کنید.", [["🏠 منوی اصلی"]]);
+      return;
+    }
     delete state.userStates[chatId];
     await fetchAndSend(chatId, userState.link, count, false);
   } 
+  else if (userState?.step === 'showing_saved') {
+    // کلیک روی چنل ذخیره شده
+    const chName = text.replace("🔍 ", "");
+    const ch = state.savedChannels.find(c => c.name === chName);
+    if (ch) {
+      state.userStates[chatId] = { step: 'waiting_for_count', link: ch.link };
+      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (عدد بفرست)", [["🏠 منوی اصلی"]]);
+    }
+  }
   else if (text === "/start") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "⚠️ ابتدا باید به تلگرام متصل شوید.\nلطفاً صبر کنید...");
@@ -303,9 +324,8 @@ function extractMessageFromUpdate(update) {
   const nm = update.new_message || update.updated_message || null;
   const chatId = update.chat_id || nm?.chat_id;
   const text = nm?.text ?? update.text ?? "";
-  const callbackData = nm?.callback_data ?? update.callback_data ?? "";
   const senderType = nm?.sender_type ?? update.sender_type ?? "";
-  return { chatId: String(chatId), text, callbackData, senderType };
+  return { chatId: String(chatId), text, senderType };
 }
 
 // ----------------------------------------------------------------------------
@@ -318,12 +338,11 @@ async function pollOnce() {
     const nextOffsetId = data?.data?.next_offset_id || data?.next_offset_id;
 
     for (const update of updates) {
-      const { chatId, text, callbackData, senderType } = extractMessageFromUpdate(update);
+      const { chatId, text, senderType } = extractMessageFromUpdate(update);
       if (!chatId || senderType === "Bot") continue;
       
       state.messageCount += 1;
-      if (callbackData) await handleCallback(chatId, callbackData);
-      else if (text) await handleTextMessage(chatId, text);
+      if (text) await handleTextMessage(chatId, text);
     }
 
     if (nextOffsetId) state.offsetId = nextOffsetId;
