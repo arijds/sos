@@ -8,8 +8,8 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { TelegramClient, Api } from "telegram";
-import { StringSession } from "telegram/sessions";
+import { TelegramClient, Api } from "telegram/index.js";
+import { StringSession } from "telegram/sessions/index.js";
 import FormData from "form-data";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,7 +41,7 @@ const state = {
   isTgLoggedIn: false,
   tgClient: null,
   tgPhoneCodeHash: null,
-  userStates: {}, // مدیریت وضعیت کاربران در ربات
+  userStates: {},
   savedChannels: []
 };
 
@@ -392,7 +392,7 @@ app.post("/api/stop", (req, res) => res.json(stopBot()));
 app.listen(PORT, () => log("info", `پنل روی http://localhost:${PORT} اجراست.`));
 
 // ----------------------------------------------------------------------------
-// رندر HTML پنل مدیریت (دقیقاً همون استایل سورس خودت)
+// رندر HTML پنل مدیریت
 // ----------------------------------------------------------------------------
 function renderAdminPage() {
   return `<!DOCTYPE html>
