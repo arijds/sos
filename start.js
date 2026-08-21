@@ -1,6 +1,5 @@
 // ============================================================================
-//  ربات دانلودر تلگرام برای روبیکا  —  یک فایلی (start.js)
-//  اجرا: node start.js
+//  ربات دانلودر تلگرام برای روبیکا  —  نسخه اصلاح‌شده
 // ============================================================================
 
 import express from "express";
@@ -98,7 +97,9 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
 
 async function sendMessage(chatId, text, keyboard = null) {
   const body = { chat_id: String(chatId), text };
-  if (keyboard) body.reply_markup = JSON.stringify({ inline_keyboard: keyboard });
+  if (keyboard) {
+    body.reply_markup = JSON.stringify({ inline_keyboard: keyboard });
+  }
   return rubikaCall("sendMessage", body);
 }
 
@@ -220,8 +221,7 @@ function getMainMenu() {
   return [
     [{ text: "🔍 جستجو در چنل", callback_data: "menu:search" }],
     [{ text: "⚡ دانلود سریع (همه)", callback_data: "menu:fast" }],
-    [{ text: "💾 چنل‌های ذخیره شده", callback_data: "menu:saved" }],
-    [{ text: state.isTgLoggedIn ? "✅ متصل به تلگرام" : "❌ اتصال به تلگرام", callback_data: "menu:tg_login" }]
+    [{ text: "💾 چنل‌های ذخیره شده", callback_data: "menu:saved" }]
   ];
 }
 
@@ -248,10 +248,6 @@ async function handleCallback(chatId, data) {
     });
     await sendMessage(chatId, text, kb);
   } 
-  else if (data === "menu:tg_login") {
-    if (state.isTgLoggedIn) return sendMessage(chatId, "✅ شما قبلاً متصل شده‌اید.");
-    await sendTgCode(chatId);
-  } 
   else if (data.startsWith("save:")) {
     const [, info] = data.split(":");
     const [link, name] = info.split("|");
@@ -262,6 +258,7 @@ async function handleCallback(chatId, data) {
     } else {
       await sendMessage(chatId, "⚠️ قبلاً ذخیره شده.");
     }
+    await showMainMenu(chatId);
   }
   else if (data.startsWith("saved_go:")) {
     const link = data.replace("saved_go:", "");
@@ -293,7 +290,12 @@ async function handleTextMessage(chatId, text) {
     await fetchAndSend(chatId, userState.link, count, false);
   } 
   else if (text === "/start") {
-    await showMainMenu(chatId);
+    if (!state.isTgLoggedIn) {
+      await sendMessage(chatId, "⚠️ ابتدا باید به تلگرام متصل شوید.\nلطفاً صبر کنید...");
+      await sendTgCode(chatId);
+    } else {
+      await showMainMenu(chatId);
+    }
   }
 }
 
