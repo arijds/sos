@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات دانلودر تلگرام برای روبیکا  —  نسخه با دکمه‌های reply_keyboard
+//  ربات دانلودر تلگرام برای روبیکا  —  نسخه با دستورات
 // ============================================================================
 
 import express from "express";
@@ -95,17 +95,8 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
   }
 }
 
-async function sendMessage(chatId, text, keyboard = null) {
-  const body = { chat_id: String(chatId), text };
-  if (keyboard) {
-    // استفاده از reply_keyboard برای روبیکا
-    body.reply_markup = JSON.stringify({ 
-      keyboard: keyboard,
-      resize_keyboard: true,
-      one_time_keyboard: false
-    });
-  }
-  return rubikaCall("sendMessage", body);
+async function sendMessage(chatId, text) {
+  return rubikaCall("sendMessage", { chat_id: String(chatId), text });
 }
 
 async function sendMediaToRubika(chatId, buffer, type, caption = "") {
@@ -168,8 +159,7 @@ async function verifyTgCode(chatId, code) {
     state.isTgLoggedIn = true;
     saveTgSession();
     delete state.userStates[chatId];
-    await sendMessage(chatId, "✅ با موفقیت به تلگرام متصل شدیم!");
-    await showMainMenu(chatId);
+    await sendMessage(chatId, "✅ با موفقیت به تلگرام متصل شدیم!\n\nاز دستورات زیر استفاده کنید:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع\n/saved - چنل‌های ذخیره شده");
   } catch (err) {
     await sendMessage(chatId, "❌ کد اشتباه است یا خطایی رخ داد: " + err.message);
   }
@@ -211,9 +201,8 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
     await sendMessage(chatId, "✅ ارسال پیام‌ها تمام شد!");
     
     if (!isFast) {
-      const kb = [["💾 ذخیره این چنل"], ["🏠 منوی اصلی"]];
       state.userStates[chatId] = { step: 'ask_save', link: channelLink, name: entity.title };
-      await sendMessage(chatId, "آیا مایل به ذخیره این چنل هستید؟", kb);
+      await sendMessage(chatId, "آیا مایل به ذخیره این چنل هستید؟\nبله برای ذخیره /save را ارسال کنید\nیا /menu برای بازگشت به منو");
     }
   } catch (err) {
     await sendMessage(chatId, "❌ خطا: " + err.message);
@@ -221,102 +210,97 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
 }
 
 // ----------------------------------------------------------------------------
-// منوها و مدیریت پیام‌های روبیکا
+// مدیریت دستورات
 // ----------------------------------------------------------------------------
-function getMainMenu() {
-  return [
-    ["🔍 جستجو در چنل"],
-    ["⚡ دانلود سریع (همه)"],
-    ["💾 چنل‌های ذخیره شده"]
-  ];
-}
-
-async function showMainMenu(chatId) {
-  await sendMessage(chatId, "🏠 منوی اصلی:", getMainMenu());
-}
-
 async function handleTextMessage(chatId, text) {
   const userState = state.userStates[chatId];
+  const trimmedText = text.trim();
 
-  // مدیریت دکمه‌های منوی اصلی
-  if (text === "🔍 جستجو در چنل") {
-    state.userStates[chatId] = { step: 'waiting_for_link', action: 'search' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)", [["🏠 منوی اصلی"]]);
-  } 
-  else if (text === "⚡ دانلود سریع (همه)") {
-    state.userStates[chatId] = { step: 'waiting_for_link', action: 'fast' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:", [["🏠 منوی اصلی"]]);
-  } 
-  else if (text === "💾 چنل‌های ذخیره شده") {
-    if (state.savedChannels.length === 0) {
-      await sendMessage(chatId, "💾 لیست خالی است.", getMainMenu());
-      return;
-    }
-    let msgText = "💾 چنل‌های ذخیره شده:\n\n";
-    const kb = [];
-    state.savedChannels.forEach((ch, i) => {
-      msgText += `${i + 1}. ${ch.name}\n`;
-      kb.push([`🔍 ${ch.name}`]);
-    });
-    kb.push(["🏠 منوی اصلی"]);
-    state.userStates[chatId] = { step: 'showing_saved' };
-    await sendMessage(chatId, msgText, kb);
-  } 
-  else if (text === "🏠 منوی اصلی") {
-    delete state.userStates[chatId];
-    await showMainMenu(chatId);
-  }
-  else if (text === "💾 ذخیره این چنل") {
-    if (userState?.step === 'ask_save') {
-      if (!state.savedChannels.find(c => c.link === userState.link)) {
-        state.savedChannels.push({ link: userState.link, name: userState.name });
-        saveData();
-        await sendMessage(chatId, "✅ ذخیره شد!", getMainMenu());
-      } else {
-        await sendMessage(chatId, "⚠️ قبلاً ذخیره شده.", getMainMenu());
-      }
-      delete state.userStates[chatId];
-    }
-  }
-  else if (userState?.step === 'waiting_for_tg_code') {
-    await verifyTgCode(chatId, text.trim());
-  } 
-  else if (userState?.step === 'waiting_for_link') {
-    userState.link = text.trim();
-    if (userState.action === 'fast') {
-      delete state.userStates[chatId];
-      await fetchAndSend(chatId, userState.link, 50, true);
-      await showMainMenu(chatId);
-    } else {
-      userState.step = 'waiting_for_count';
-      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)", [["🏠 منوی اصلی"]]);
-    }
-  } 
-  else if (userState?.step === 'waiting_for_count') {
-    const count = parseInt(text);
-    if (isNaN(count) || count < 1) {
-      await sendMessage(chatId, "❌ عدد معتبر وارد کنید.", [["🏠 منوی اصلی"]]);
-      return;
-    }
-    delete state.userStates[chatId];
-    await fetchAndSend(chatId, userState.link, count, false);
-  } 
-  else if (userState?.step === 'showing_saved') {
-    // کلیک روی چنل ذخیره شده
-    const chName = text.replace("🔍 ", "");
-    const ch = state.savedChannels.find(c => c.name === chName);
-    if (ch) {
-      state.userStates[chatId] = { step: 'waiting_for_count', link: ch.link };
-      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (عدد بفرست)", [["🏠 منوی اصلی"]]);
-    }
-  }
-  else if (text === "/start") {
+  // دستورات اصلی
+  if (trimmedText === "/start") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "⚠️ ابتدا باید به تلگرام متصل شوید.\nلطفاً صبر کنید...");
       await sendTgCode(chatId);
     } else {
-      await showMainMenu(chatId);
+      await sendMessage(chatId, "👋 خوش آمدید!\n\n📋 دستورات موجود:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع همه پیام‌ها\n/saved - چنل‌های ذخیره شده\n/menu - بازگشت به منو");
     }
+  }
+  else if (trimmedText === "/menu") {
+    delete state.userStates[chatId];
+    await sendMessage(chatId, "🏠 منوی اصلی:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع\n/saved - چنل‌های ذخیره شده");
+  }
+  else if (trimmedText === "/search") {
+    if (!state.isTgLoggedIn) {
+      await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
+      return;
+    }
+    state.userStates[chatId] = { step: 'waiting_for_link', action: 'search' };
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)\n\n/menu برای بازگشت");
+  }
+  else if (trimmedText === "/fast") {
+    if (!state.isTgLoggedIn) {
+      await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
+      return;
+    }
+    state.userStates[chatId] = { step: 'waiting_for_link', action: 'fast' };
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:\n\n/menu برای بازگشت");
+  }
+  else if (trimmedText === "/saved") {
+    if (!state.isTgLoggedIn) {
+      await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
+      return;
+    }
+    if (state.savedChannels.length === 0) {
+      await sendMessage(chatId, "💾 لیست چنل‌های ذخیره شده خالی است.\n\n/menu برای بازگشت");
+      return;
+    }
+    let msgText = "💾 چنل‌های ذخیره شده:\n\n";
+    state.savedChannels.forEach((ch, i) => {
+      msgText += `${i + 1}. ${ch.name}\n   لینک: ${ch.link}\n\n`;
+    });
+    msgText += "برای جستجو در هر چنل، لینک آن را کپی و ارسال کنید.\n\n/menu برای بازگشت";
+    await sendMessage(chatId, msgText);
+  }
+  else if (trimmedText === "/save") {
+    if (userState?.step === 'ask_save') {
+      if (!state.savedChannels.find(c => c.link === userState.link)) {
+        state.savedChannels.push({ link: userState.link, name: userState.name });
+        saveData();
+        await sendMessage(chatId, "✅ چنل ذخیره شد!\n\n/menu برای بازگشت به منو");
+      } else {
+        await sendMessage(chatId, "⚠️ این چنل قبلاً ذخیره شده.\n\n/menu برای بازگشت");
+      }
+      delete state.userStates[chatId];
+    } else {
+      await sendMessage(chatId, "❌ ابتدا باید یک چنل را جستجو کنید.\n/search را بفرستید.");
+    }
+  }
+  // مدیریت ورودی‌های کاربر
+  else if (userState?.step === 'waiting_for_tg_code') {
+    await verifyTgCode(chatId, trimmedText);
+  }
+  else if (userState?.step === 'waiting_for_link') {
+    userState.link = trimmedText;
+    if (userState.action === 'fast') {
+      delete state.userStates[chatId];
+      await fetchAndSend(chatId, userState.link, 50, true);
+      await sendMessage(chatId, "\n/menu برای بازگشت به منو");
+    } else {
+      userState.step = 'waiting_for_count';
+      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)\n\n/menu برای بازگشت");
+    }
+  }
+  else if (userState?.step === 'waiting_for_count') {
+    const count = parseInt(trimmedText);
+    if (isNaN(count) || count < 1) {
+      await sendMessage(chatId, "❌ عدد معتبر وارد کنید.\n\n/menu برای بازگشت");
+      return;
+    }
+    delete state.userStates[chatId];
+    await fetchAndSend(chatId, userState.link, count, false);
+  }
+  else {
+    await sendMessage(chatId, "❓ دستور نامعتبر.\n\n/start برای مشاهده دستورات");
   }
 }
 
@@ -453,6 +437,8 @@ function renderAdminPage() {
   #toast.show { display: block; }
   #toast.ok { border-color: var(--green); }
   #toast.error { border-color: var(--red); }
+  .commands { background: #0b1220; padding: 15px; border-radius: 8px; margin-top: 10px; font-family: monospace; font-size: 13px; }
+  .commands div { margin: 5px 0; }
 </style>
 </head>
 <body>
@@ -488,6 +474,18 @@ function renderAdminPage() {
       <button class="btn-primary" onclick="saveConfig()">💾 ذخیره تنظیمات</button>
       <button class="btn-success" onclick="startBot()">▶️ راه‌اندازی ربات</button>
       <button class="btn-danger" onclick="stopBot()">⏹ توقف ربات</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>دستورات ربات در روبیکا</h2>
+    <div class="commands">
+      <div><strong>/start</strong> - منوی اصلی و شروع کار</div>
+      <div><strong>/search</strong> - جستجو در چنل تلگرام</div>
+      <div><strong>/fast</strong> - دانلود سریع همه پیام‌ها</div>
+      <div><strong>/saved</strong> - مشاهده چنل‌های ذخیره شده</div>
+      <div><strong>/save</strong> - ذخیره چنل فعلی</div>
+      <div><strong>/menu</strong> - بازگشت به منوی اصلی</div>
     </div>
   </div>
 </div>
