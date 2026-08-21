@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات پیشرفته روبیکا - نسخه با لاگین تلگرام در پنل وب
+//  ربات پیشرفته روبیکا - نسخه با لاگین واضح در پنل وب
 // ============================================================================
 
 import express from "express";
@@ -43,7 +43,8 @@ const state = {
   userStates: {},
   tgConnecting: false,
   channelListeners: new Map(),
-  savedChannels: []
+  savedChannels: [],
+  codeSent: false // ✅ وضعیت ارسال کد
 };
 
 let config = {
@@ -176,7 +177,6 @@ async function initTgClient() {
   }
 }
 
-// ✅ تابع جدید: ارسال کد از پنل وب
 async function sendTgCodeFromWeb(phone) {
   try {
     if (!state.tgClient) {
@@ -188,13 +188,13 @@ async function sendTgCodeFromWeb(phone) {
       phone
     );
     state.tgPhoneCodeHash = result.phoneCodeHash;
+    state.codeSent = true; // ✅ علامت بزن کد ارسال شده
     return { success: true, message: "کد ارسال شد" };
   } catch (err) {
     return { success: false, message: err.message };
   }
 }
 
-// ✅ تابع جدید: تایید کد از پنل وب
 async function verifyTgCodeFromWeb(code) {
   try {
     await state.tgClient.invoke(new Api.auth.SignIn({
@@ -203,6 +203,7 @@ async function verifyTgCodeFromWeb(code) {
       phoneCode: code
     }));
     state.isTgLoggedIn = true;
+    state.codeSent = false;
     saveTgSession();
     return { success: true, message: "لاگین موفق" };
   } catch (err) {
@@ -581,7 +582,8 @@ app.get("/api/status", (req, res) => {
     hasRubikaToken: Boolean(config.rubikaToken),
     hasTgConfig: Boolean(config.tgApiId && config.tgApiHash && config.tgPhone),
     isTgLoggedIn: state.isTgLoggedIn, 
-    tgConnecting: state.tgConnecting
+    tgConnecting: state.tgConnecting,
+    codeSent: state.codeSent // ✅ ارسال وضعیت کد
   });
 });
 
@@ -594,7 +596,6 @@ app.post("/api/config", (req, res) => {
   res.json({ ok: saveConfig(), message: "تنظیمات ذخیره شد." });
 });
 
-// ✅ API جدید: ارسال کد تلگرام
 app.post("/api/send-code", async (req, res) => {
   try {
     const { phone } = req.body;
@@ -612,7 +613,6 @@ app.post("/api/send-code", async (req, res) => {
   }
 });
 
-// ✅ API جدید: تایید کد تلگرام
 app.post("/api/verify-code", async (req, res) => {
   try {
     const { code } = req.body;
@@ -658,7 +658,7 @@ app.post("/api/stop", (req, res) => {
 app.listen(PORT, () => log("info", `پنل روی http://localhost:${PORT} اجراست.`));
 
 // ----------------------------------------------------------------------------
-// رندر HTML پنل مدیریت
+// رندر HTML پنل مدیریت - ✅ نسخه با UI واضح
 // ----------------------------------------------------------------------------
 function renderAdminPage() {
   return `<!DOCTYPE html>
@@ -693,11 +693,12 @@ function renderAdminPage() {
   .status-off .dot { background: var(--red); }
   .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-top: 10px; }
   .info-grid div span { color: var(--muted); display: block; font-size: 11px; margin-bottom: 2px; }
-  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; max-width: 90%; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; max-width: 90%; z-index: 1000; }
   #toast.show { display: block; }
   #toast.ok { border-color: var(--green); }
   #toast.error { border-color: var(--red); }
   .hidden { display: none; }
+  .alert-box { background: rgba(234,179,8,0.1); border: 1px solid var(--yellow); border-radius: 8px; padding: 12px; margin-bottom: 14px; color: var(--yellow); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -723,24 +724,31 @@ function renderAdminPage() {
   </div>
 
   <div class="card" id="loginCard">
-    <h2>اتصال به تلگرام</h2>
+    <h2>🔐 اتصال به تلگرام</h2>
+    
     <div id="loginStep1">
       <label>شماره تلفن تلگرام (با کد کشور)</label>
       <input id="tgPhone" type="text" placeholder="+989xxxxxxxxx" />
       <button class="btn-success" onclick="sendCode()" style="width:100%">📱 ارسال کد تایید</button>
     </div>
+
     <div id="loginStep2" class="hidden">
-      <label>کد تایید ارسال شده به تلگرام</label>
-      <input id="tgCode" type="text" placeholder="کد 5 رقمی" />
-      <button class="btn-success" onclick="verifyCode()" style="width:100%">✅ تایید و اتصال</button>
+      <div class="alert-box">
+        ✅ کد تایید به تلگرام شما ارسال شد!<br>
+        لطفاً تلگرام را چک کنید و کد 5 رقمی را در کادر زیر وارد کنید.
+      </div>
+      <label>🔑 کد تایید تلگرام</label>
+      <input id="tgCode" type="text" placeholder="کد 5 رقمی را اینجا وارد کنید" autofocus />
+      <button class="btn-success" onclick="verifyCode()" style="width:100%">✅ تایید و اتصال به تلگرام</button>
+      <button class="btn-primary" onclick="resendCode()" style="width:100%; margin-top:10px">🔄 ارسال مجدد کد</button>
     </div>
   </div>
 
   <div class="card">
     <h2>کنترل ربات</h2>
     <div class="row">
-      <button class="btn-success" onclick="startBot()" style="flex:1">▶️ راه‌اندازی</button>
-      <button class="btn-danger" onclick="stopBot()" style="flex:1">⏹ توقف</button>
+      <button class="btn-success" onclick="startBot()" style="flex:1">▶️ راه‌اندازی ربات</button>
+      <button class="btn-danger" onclick="stopBot()" style="flex:1">⏹ توقف ربات</button>
     </div>
   </div>
 </div>
@@ -785,12 +793,36 @@ function renderAdminPage() {
       });
       const data = await res.json();
       
-      if (data.ok) {
-        showToast('کد ارسال شد! چک کنید تلگرام', true);
+      if (data.success) {
+        showToast('✅ کد ارسال شد! تلگرام را چک کنید', true);
+        // ✅ خودکار فرم کد رو نشون بده
         document.getElementById('loginStep1').classList.add('hidden');
         document.getElementById('loginStep2').classList.remove('hidden');
+        document.getElementById('tgCode').focus();
       } else {
-        showToast('خطا: ' + data.message, false);
+        showToast('❌ خطا: ' + data.message, false);
+      }
+    } catch (e) { showToast('خطا: ' + e.message, false); }
+  }
+
+  async function resendCode() {
+    const phone = document.getElementById('tgPhone').value;
+    if (!phone) {
+      showToast('لطفاً شماره تلفن را وارد کنید', false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/send-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        showToast('✅ کد مجدد ارسال شد!', true);
+      } else {
+        showToast('❌ خطا: ' + data.message, false);
       }
     } catch (e) { showToast('خطا: ' + e.message, false); }
   }
@@ -809,11 +841,11 @@ function renderAdminPage() {
       });
       const data = await res.json();
       
-      if (data.ok) {
-        showToast('✅ با موفقیت متصل شد!', true);
+      if (data.success) {
+        showToast('✅ با موفقیت به تلگرام متصل شدید!', true);
         refreshStatus();
       } else {
-        showToast('خطا: ' + data.message, false);
+        showToast('❌ خطا: ' + data.message, false);
       }
     } catch (e) { showToast('خطا: ' + e.message, false); }
   }
@@ -863,10 +895,30 @@ function renderAdminPage() {
         <div><span>وضعیت تلگرام</span>\${tgStatus}</div>
       \`;
 
+      // ✅ اگر متصل شده، فرم لاگین رو عوض کن
       if (s.isTgLoggedIn) {
-        document.getElementById('loginCard').innerHTML = '<h2>✅ تلگرام متصل است</h2><p style="color:var(--green)">با موفقیت به تلگرام متصل شده‌اید.</p>';
+        document.getElementById('loginCard').innerHTML = \`
+          <h2>✅ تلگرام متصل است</h2>
+          <p style="color:var(--green); margin:10px 0;">با موفقیت به تلگرام متصل شده‌اید.</p>
+          <button class="btn-danger" onclick="logout()" style="width:100%">🚪 خروج از تلگرام</button>
+        \`;
+      } 
+      // ✅ اگر کد ارسال شده، فرم کد رو نشون بده
+      else if (s.codeSent) {
+        document.getElementById('loginStep1').classList.add('hidden');
+        document.getElementById('loginStep2').classList.remove('hidden');
       }
     } catch (e) { console.error(e); }
+  }
+
+  async function logout() {
+    if (!confirm('آیا مطمئن هستید؟')) return;
+    try {
+      localStorage.clear();
+      location.reload();
+    } catch (e) {
+      showToast('خطا: ' + e.message, false);
+    }
   }
 
   refreshStatus();
