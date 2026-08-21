@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات دانلودر تلگرام برای روبیکا  —  نسخه با دستورات
+//  ربات دانلودر تلگرام برای روبیکا  —  نسخه بدون timeout
 // ============================================================================
 
 import express from "express";
@@ -41,7 +41,8 @@ const state = {
   tgClient: null,
   tgPhoneCodeHash: null,
   userStates: {},
-  savedChannels: []
+  savedChannels: [],
+  tgConnecting: false // وضعیت اتصال تلگرام
 };
 
 let config = {
@@ -88,7 +89,7 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
   if (!token) throw new Error("توکن ربات روبیکا تنظیم نشده است.");
   const url = `${RUBIKA_BASE_URL}/${token}/${method}`;
   try {
-    const res = await axios.post(url, body, { headers: { "Content-Type": "application/json" }, timeout: 15000 });
+    const res = await axios.post(url, body, { headers: { "Content-Type": "application/json" }, timeout: 10000 });
     return res.data;
   } catch (err) {
     throw new Error(`خطا در متد ${method}: ${err.response?.data?.status_det || err.message}`);
@@ -114,24 +115,37 @@ async function sendMediaToRubika(chatId, buffer, type, caption = "") {
 }
 
 // ----------------------------------------------------------------------------
-// مدیریت کلاینت تلگرام
+// مدیریت کلاینت تلگرام (بدون timeout)
 // ----------------------------------------------------------------------------
 async function initTgClient() {
-  if (!config.tgApiId || !config.tgApiHash) return false;
+  if (!config.tgApiId || !config.tgApiHash) {
+    log("warn", "تنظیمات تلگرام کامل نیست");
+    return false;
+  }
+  
+  state.tgConnecting = true;
+  log("info", "شروع اتصال به تلگرام...");
   
   let sessionStr = '';
   if (fs.existsSync(SESSION_PATH)) {
     try { sessionStr = JSON.parse(fs.readFileSync(SESSION_PATH, "utf-8")).session || ''; } catch(e) {}
   }
 
-  state.tgClient = new TelegramClient(new StringSession(sessionStr), parseInt(config.tgApiId), config.tgApiHash, { connectionRetries: 5 });
-  
   try {
+    state.tgClient = new TelegramClient(
+      new StringSession(sessionStr), 
+      parseInt(config.tgApiId), 
+      config.tgApiHash, 
+      { connectionRetries: 3, timeout: 10 } // کاهش timeout
+    );
+    
     await state.tgClient.connect();
     state.isTgLoggedIn = await state.tgClient.isUserAuthorized();
+    state.tgConnecting = false;
     log("info", `وضعیت تلگرام: ${state.isTgLoggedIn ? 'متصل' : 'نیاز به لاگین'}`);
     return state.isTgLoggedIn;
   } catch (err) {
+    state.tgConnecting = false;
     log("error", "خطا در اتصال به تلگرام:", err.message);
     state.isTgLoggedIn = false;
     return false;
@@ -216,11 +230,14 @@ async function handleTextMessage(chatId, text) {
   const userState = state.userStates[chatId];
   const trimmedText = text.trim();
 
-  // دستورات اصلی
   if (trimmedText === "/start") {
     if (!state.isTgLoggedIn) {
-      await sendMessage(chatId, "⚠️ ابتدا باید به تلگرام متصل شوید.\nلطفاً صبر کنید...");
-      await sendTgCode(chatId);
+      if (state.tgConnecting) {
+        await sendMessage(chatId, "⏳ در حال اتصال به تلگرام...\nلطفاً چند لحظه صبر کنید و دوباره /start را بفرستید.");
+      } else {
+        await sendMessage(chatId, "⚠️ ابتدا باید به تلگرام متصل شوید.\nلطفاً صبر کنید...");
+        await sendTgCode(chatId);
+      }
     } else {
       await sendMessage(chatId, "👋 خوش آمدید!\n\n📋 دستورات موجود:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع همه پیام‌ها\n/saved - چنل‌های ذخیره شده\n/menu - بازگشت به منو");
     }
@@ -275,7 +292,6 @@ async function handleTextMessage(chatId, text) {
       await sendMessage(chatId, "❌ ابتدا باید یک چنل را جستجو کنید.\n/search را بفرستید.");
     }
   }
-  // مدیریت ورودی‌های کاربر
   else if (userState?.step === 'waiting_for_tg_code') {
     await verifyTgCode(chatId, trimmedText);
   }
@@ -339,29 +355,6 @@ async function pollOnce() {
   }
 }
 
-async function startBot() {
-  if (state.running) return { ok: true, message: "ربات از قبل در حال اجراست." };
-  if (!config.rubikaToken) throw new Error("ابتدا توکن ربات روبیکا را وارد کنید.");
-  
-  const meRes = await rubikaCall("getMe", {});
-  state.botInfo = meRes?.data?.bot || meRes?.bot || null;
-  
-  await initTgClient();
-  
-  state.running = true;
-  state.messageCount = 0;
-  log("info", "ربات شروع به کار کرد.");
-  pollOnce();
-  return { ok: true, message: "ربات راه‌اندازی شد." };
-}
-
-function stopBot() {
-  state.running = false;
-  if (state.pollTimeout) clearTimeout(state.pollTimeout);
-  log("info", "ربات متوقف شد.");
-  return { ok: true, message: "ربات متوقف شد." };
-}
-
 // ----------------------------------------------------------------------------
 // اپلیکیشن Express و پنل مدیریت
 // ----------------------------------------------------------------------------
@@ -372,10 +365,15 @@ app.get("/", (req, res) => res.setHeader("Content-Type", "text/html; charset=utf
 
 app.get("/api/status", (req, res) => {
   res.json({
-    running: state.running, messageCount: state.messageCount, lastError: state.lastError,
-    botInfo: state.botInfo, hasRubikaToken: Boolean(config.rubikaToken),
+    running: state.running, 
+    messageCount: state.messageCount, 
+    lastError: state.lastError,
+    botInfo: state.botInfo, 
+    hasRubikaToken: Boolean(config.rubikaToken),
     hasTgConfig: Boolean(config.tgApiId && config.tgApiHash && config.tgPhone),
-    isTgLoggedIn: state.isTgLoggedIn, savedCount: state.savedChannels.length
+    isTgLoggedIn: state.isTgLoggedIn, 
+    tgConnecting: state.tgConnecting,
+    savedCount: state.savedChannels.length
   });
 });
 
@@ -388,11 +386,51 @@ app.post("/api/config", (req, res) => {
   res.json({ ok: saveConfig(), message: "تنظیمات ذخیره شد." });
 });
 
+// ✅ اصلاح شده: شروع سریع بدون timeout
 app.post("/api/start", async (req, res) => {
-  try { res.json(await startBot()); } catch (err) { res.status(400).json({ ok: false, message: err.message }); }
+  try {
+    if (state.running) {
+      return res.json({ ok: true, message: "ربات از قبل در حال اجراست." });
+    }
+    if (!config.rubikaToken) {
+      return res.status(400).json({ ok: false, message: "ابتدا توکن ربات روبیکا را وارد کنید." });
+    }
+    
+    // بررسی سریع توکن روبیکا
+    try {
+      const meRes = await rubikaCall("getMe", {});
+      state.botInfo = meRes?.data?.bot || meRes?.bot || null;
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: "توکن روبیکا نامعتبر است: " + err.message });
+    }
+    
+    // شروع ربات
+    state.running = true;
+    state.messageCount = 0;
+    log("info", "ربات شروع به کار کرد.");
+    pollOnce();
+    
+    // اتصال تلگرام در پس‌زمینه (بدون منتظر ماندن)
+    initTgClient().then(() => {
+      log("info", "اتصال تلگرام در پس‌زمینه کامل شد");
+    }).catch(err => {
+      log("error", "خطا در اتصال تلگرام:", err.message);
+    });
+    
+    // پاسخ سریع
+    res.json({ ok: true, message: "ربات راه‌اندازی شد. اتصال تلگرام در پس‌زمینه در حال انجام است." });
+  } catch (err) {
+    log("error", "خطا در راه‌اندازی:", err.message);
+    res.status(400).json({ ok: false, message: err.message });
+  }
 });
 
-app.post("/api/stop", (req, res) => res.json(stopBot()));
+app.post("/api/stop", (req, res) => {
+  state.running = false;
+  if (state.pollTimeout) clearTimeout(state.pollTimeout);
+  log("info", "ربات متوقف شد.");
+  res.json({ ok: true, message: "ربات متوقف شد." });
+});
 
 app.listen(PORT, () => log("info", `پنل روی http://localhost:${PORT} اجراست.`));
 
@@ -407,7 +445,7 @@ function renderAdminPage() {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>پنل دانلودر تلگرام</title>
 <style>
-  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #6366f1; --green: #22c55e; --red: #ef4444; }
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #6366f1; --green: #22c55e; --red: #ef4444; --yellow: #eab308; }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: "Vazirmatn", Tahoma, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 24px; }
   .container { max-width: 720px; margin: 0 auto; }
@@ -431,6 +469,9 @@ function renderAdminPage() {
   .status-on .dot { background: var(--green); }
   .status-off { background: rgba(239,68,68,0.15); color: var(--red); }
   .status-off .dot { background: var(--red); }
+  .status-connecting { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .status-connecting .dot { background: var(--yellow); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-top: 10px; }
   .info-grid div span { color: var(--muted); display: block; font-size: 11px; margin-bottom: 2px; }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; max-width: 90%; }
@@ -539,22 +580,35 @@ function renderAdminPage() {
     try {
       const s = await (await fetch('/api/status')).json();
       const badge = document.getElementById('statusBadge');
-      badge.className = 'status-badge ' + (s.running ? 'status-on' : 'status-off');
-      badge.innerHTML = '<span class="dot"></span> ' + (s.running ? 'در حال اجرا' : 'متوقف');
+      
+      if (s.running) {
+        badge.className = 'status-badge status-on';
+        badge.innerHTML = '<span class="dot"></span> در حال اجرا';
+      } else {
+        badge.className = 'status-badge status-off';
+        badge.innerHTML = '<span class="dot"></span> متوقف';
+      }
+
+      let tgStatus = '❌ متصل نیست';
+      if (s.tgConnecting) {
+        tgStatus = '<span style="color: #eab308;">⏳ در حال اتصال...</span>';
+      } else if (s.isTgLoggedIn) {
+        tgStatus = '✅ متصل';
+      }
 
       document.getElementById('infoGrid').innerHTML = \`
         <div><span>پیام‌های پردازش شده</span>\${s.messageCount}</div>
         <div><span>چنل‌های ذخیره شده</span>\${s.savedCount}</div>
         <div><span>توکن روبیکا</span>\${s.hasRubikaToken ? '✅' : '❌'}</div>
         <div><span>تنظیمات تلگرام</span>\${s.hasTgConfig ? '✅' : '❌'}</div>
-        <div><span>وضعیت تلگرام</span>\${s.isTgLoggedIn ? '✅ متصل' : '❌ متصل نیست'}</div>
+        <div><span>وضعیت تلگرام</span>\${tgStatus}</div>
         <div><span>آخرین خطا</span>\${s.lastError || '-'}</div>
       \`;
     } catch (e) { console.error(e); }
   }
 
   refreshStatus();
-  setInterval(refreshStatus, 5000);
+  setInterval(refreshStatus, 3000);
 </script>
 </body>
 </html>`;
