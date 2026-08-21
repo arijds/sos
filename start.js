@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات پیشرفته روبیکا - نسخه نهایی با ذخیره صحیح تنظیمات
+//  ربات پیشرفته روبیکا - نسخه فقط دستورات (بدون دکمه)
 // ============================================================================
 
 import express from "express";
@@ -21,10 +21,10 @@ const DATA_PATH = path.join(__dirname, "bot-data.json");
 const RUBIKA_BASE_URL = "https://botapi.rubika.ir/v3";
 
 function log(level, ...args) {
-  const time = new Date().toISOString().replace("T", " ").slice(0, 19);
-  const prefix = `[${time}] [${level.toUpperCase()}]`;
-  if (level === "error") console.error(prefix, ...args);
-  else console.log(prefix, ...args);
+  if (level === "error") {
+    const time = new Date().toISOString().replace("T", " ").slice(0, 19);
+    console.error(`[${time}] [ERROR]`, ...args);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -36,7 +36,6 @@ const state = {
   offsetId: null,
   messageCount: 0,
   lastError: null,
-  botInfo: null,
   isTgLoggedIn: false,
   tgClient: null,
   tgPhoneCodeHash: null,
@@ -57,14 +56,7 @@ let config = {
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      const loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
-      config = { ...config, ...loaded };
-      log("info", "تنظیمات بارگذاری شد:", {
-        hasToken: !!config.rubikaToken,
-        hasApiId: !!config.tgApiId,
-        hasApiHash: !!config.tgApiHash,
-        hasPhone: !!config.tgPhone
-      });
+      config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) };
     }
     if (fs.existsSync(DATA_PATH)) {
       const data = JSON.parse(fs.readFileSync(DATA_PATH, "utf-8"));
@@ -77,14 +69,7 @@ function loadConfig() {
 
 function saveConfig() {
   try {
-    const data = JSON.stringify(config, null, 2);
-    fs.writeFileSync(CONFIG_PATH, data, "utf-8");
-    log("info", "تنظیمات ذخیره شد:", {
-      hasToken: !!config.rubikaToken,
-      hasApiId: !!config.tgApiId,
-      hasApiHash: !!config.tgApiHash,
-      hasPhone: !!config.tgPhone
-    });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
     return true;
   } catch (err) { 
     log("error", "خطا در ذخیره تنظیمات:", err.message); 
@@ -126,16 +111,8 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
   }
 }
 
-async function sendMessage(chatId, text, keyboard = null) {
-  const body = { chat_id: String(chatId), text };
-  if (keyboard && keyboard.length > 0) {
-    body.reply_markup = JSON.stringify({ 
-      keyboard: keyboard,
-      resize_keyboard: true,
-      one_time_keyboard: false
-    });
-  }
-  return rubikaCall("sendMessage", body);
+async function sendMessage(chatId, text) {
+  return rubikaCall("sendMessage", { chat_id: String(chatId), text });
 }
 
 async function sendMediaToRubika(chatId, buffer, type, caption = "") {
@@ -172,11 +149,10 @@ async function sendMediaToRubika(chatId, buffer, type, caption = "") {
 // ----------------------------------------------------------------------------
 async function initTgClient() {
   if (!config.tgApiId || !config.tgApiHash) {
-    throw new Error("تنظیمات تلگرام کامل نیست. لطفاً API ID و API Hash را وارد و ذخیره کنید.");
+    throw new Error("تنظیمات تلگرام کامل نیست.");
   }
   
   state.tgConnecting = true;
-  log("info", "شروع اتصال به تلگرام...");
   
   let sessionStr = '';
   if (fs.existsSync(SESSION_PATH)) {
@@ -194,7 +170,6 @@ async function initTgClient() {
     await state.tgClient.connect();
     state.isTgLoggedIn = await state.tgClient.isUserAuthorized();
     state.tgConnecting = false;
-    log("info", `وضعیت تلگرام: ${state.isTgLoggedIn ? 'متصل' : 'نیاز به لاگین'}`);
     return true;
   } catch (err) {
     state.tgConnecting = false;
@@ -206,7 +181,6 @@ async function initTgClient() {
 
 async function ensureTgClient() {
   if (!state.tgClient) {
-    log("info", "کلاینت تلگرام وجود ندارد، در حال ساخت...");
     await initTgClient();
   }
   
@@ -219,15 +193,8 @@ async function ensureTgClient() {
 
 async function sendTgCodeFromWeb(phone) {
   try {
-    log("info", "بررسی تنظیمات تلگرام:", {
-      apiId: config.tgApiId,
-      apiHash: config.tgApiHash ? '***' : '',
-      phone: config.tgPhone
-    });
-
     const client = await ensureTgClient();
     
-    log("info", `ارسال کد به شماره: ${phone}`);
     const result = await client.sendCode(
       { apiId: parseInt(config.tgApiId), apiHash: config.tgApiHash }, 
       phone
@@ -235,7 +202,6 @@ async function sendTgCodeFromWeb(phone) {
     
     state.tgPhoneCodeHash = result.phoneCodeHash;
     state.codeSent = true;
-    log("info", "کد با موفقیت ارسال شد");
     return { success: true, message: "کد ارسال شد" };
   } catch (err) {
     log("error", "خطا در ارسال کد:", err.message);
@@ -251,7 +217,6 @@ async function verifyTgCodeFromWeb(code) {
       return { success: false, message: "ابتدا کد را ارسال کنید" };
     }
     
-    log("info", "تایید کد...");
     await client.invoke(new Api.auth.SignIn({
       phoneNumber: config.tgPhone,
       phoneCodeHash: state.tgPhoneCodeHash,
@@ -261,7 +226,6 @@ async function verifyTgCodeFromWeb(code) {
     state.isTgLoggedIn = true;
     state.codeSent = false;
     saveTgSession();
-    log("info", "لاگین موفقیت‌آمیز بود");
     return { success: true, message: "لاگین موفق" };
   } catch (err) {
     log("error", "خطا در تایید کد:", err.message);
@@ -383,12 +347,9 @@ function startChannelListener(chatId, tgChannel, rubikaChannelId) {
   const key = `${chatId}_${tgChannel.id}`;
   
   if (state.channelListeners.has(key)) {
-    log("info", `Listener قبلاً فعال است: ${key}`);
     return;
   }
 
-  log("info", `شروع listener برای چنل: ${tgChannel.title}`);
-  
   const interval = setInterval(async () => {
     try {
       const messages = await state.tgClient.getMessages(tgChannel.entity, { limit: 5 });
@@ -458,32 +419,63 @@ async function startTgBot(chatId, botUsername) {
 }
 
 // ----------------------------------------------------------------------------
-// مدیریت دستورات ربات روبیکا
+// ✅ مدیریت دستورات - فقط متنی بدون دکمه
 // ----------------------------------------------------------------------------
 async function handleTextMessage(chatId, text) {
   const userState = state.userStates[chatId] || { step: 'idle' };
   const trimmedText = text.trim();
 
-  const mainMenu = [
-    ["📢 چنل‌های من", "⚙️ تنظیم چنل"],
-    ["👥 گروه‌های من", "🤖 استارت ربات"]
-  ];
-
-  const backMenu = [["🏠 منوی اصلی"]];
-
-  if (trimmedText === "/start" || trimmedText === "🏠 منوی اصلی") {
+  // ✅ /start - راهنمای کامل
+  if (trimmedText === "/start") {
     if (!state.isTgLoggedIn) {
-      await sendMessage(chatId, "⚠️ ابتدا باید از پنل وب به تلگرام متصل شوید.", mainMenu);
+      await sendMessage(chatId, "⚠️ ابتدا باید از پنل وب به تلگرام متصل شوید.\n\nلطفاً به سایت مراجعه کنید.");
     } else {
       state.userStates[chatId] = { step: 'idle' };
-      await sendMessage(chatId, "👋 خوش آمدید!\n\nاز دکمه‌ها یا دستورات استفاده کنید:", mainMenu);
+      await sendMessage(chatId, 
+`👋 خوش آمدید به ربات پیشرفته!
+
+📋 دستورات موجود:
+
+/start - نمایش این راهنما
+/channels - لیست چنل‌های تلگرام که ادمین هستید
+/groups - لیست گروه‌های تلگرام که ادمین هستید
+/saved - مشاهده چنل‌های ذخیره شده
+/bot - استارت یک ربات تلگرامی
+/menu - بازگشت به منوی اصلی
+
+💡 راهنمای استفاده:
+
+1️⃣ برای فوروارد از چنل تلگرام:
+   /channels → انتخاب چنل با /ch1 یا /ch2 و...
+   → ارسال لینک چنل تلگرامی
+
+2️⃣ برای فوروارد از گروه تلگرام:
+   /groups → انتخاب گروه با /gr1 یا /gr2 و...
+   → ارسال لینک گروه تلگرامی
+
+3️⃣ برای استارت ربات تلگرامی:
+   /bot → ارسال آیدی ربات (مثلاً @BotFather)
+
+4️⃣ برای ذخیره چنل:
+   بعد از فوروارد، /save را بزنید
+
+✅ هر پیامی از چنل/گروه تلگرام بیاد، خودکار به اینجا فوروارد میشه!`);
     }
   }
+  // ✅ /menu - منوی ساده
   else if (trimmedText === "/menu") {
     state.userStates[chatId] = { step: 'idle' };
-    await sendMessage(chatId, "🏠 منوی اصلی:", mainMenu);
+    await sendMessage(chatId, 
+`🏠 منوی اصلی:
+
+/start - راهنمای کامل
+/channels - چنل‌های من
+/groups - گروه‌های من
+/saved - چنل‌های ذخیره شده
+/bot - استارت ربات تلگرامی`);
   }
-  else if (trimmedText === "/channels" || trimmedText === "📢 چنل‌های من") {
+  // ✅ /channels - لیست چنل‌ها
+  else if (trimmedText === "/channels") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید از پنل وب لاگین کنید.");
       return;
@@ -493,23 +485,23 @@ async function handleTextMessage(chatId, text) {
     const channels = await getTgChannels();
 
     if (channels.length === 0) {
-      await sendMessage(chatId, "❌ هیچ چنلی یافت نشد.", mainMenu);
+      await sendMessage(chatId, "❌ هیچ چنلی یافت نشد.\n\nشما باید در تلگرام ادمین چنل باشید.");
       return;
     }
 
     let msg = "📢 چنل‌هایی که ادمین هستید:\n\n";
-    const kb = [];
     
     channels.forEach((ch, i) => {
       msg += `${i + 1}. ${ch.title}\n`;
-      kb.push([`/ch${i + 1}`]);
+      msg += `   برای انتخاب: /ch${i + 1}\n\n`;
     });
     
-    kb.push(["🏠 منوی اصلی"]);
+    msg += "💡 یکی از دستورات بالا را بزنید تا چنل انتخاب شود.";
     
     state.userStates[chatId] = { step: 'selecting_channel', channels };
-    await sendMessage(chatId, msg, kb);
+    await sendMessage(chatId, msg);
   }
+  // ✅ انتخاب چنل با /ch1, /ch2, ...
   else if (trimmedText.match(/^\/ch\d+$/)) {
     if (userState.step !== 'selecting_channel') {
       await sendMessage(chatId, "❌ ابتدا دستور /channels را بزنید.");
@@ -529,8 +521,13 @@ async function handleTextMessage(chatId, text) {
       selectedChannel: channel
     };
 
-    await sendMessage(chatId, `✅ چنل "${channel.title}" انتخاب شد.\n\nحالا لینک چنل تلگرامی را ارسال کنید:`, backMenu);
+    await sendMessage(chatId, 
+`✅ چنل "${channel.title}" انتخاب شد.
+
+حالا لینک چنل تلگرامی را ارسال کنید:
+(مثال: https://t.me/durov)`);
   }
+  // ✅ دریافت لینک چنل تلگرامی
   else if (userState.step === 'waiting_for_tg_channel_link') {
     const link = trimmedText;
 
@@ -540,13 +537,27 @@ async function handleTextMessage(chatId, text) {
 
       startChannelListener(chatId, { id: entity.id, title: entity.title, entity }, chatId);
 
-      await sendMessage(chatId, `✅ فوروارد خودکار فعال شد!\n\nاز: ${entity.title}\nبه: این چت`, mainMenu);
+      await sendMessage(chatId, 
+`✅ فوروارد خودکار فعال شد!
+
+از چنل تلگرام: ${entity.title}
+به این چت روبیکا
+
+💡 هر پیامی که منتشر بشه، خودکار فوروارد میشه.
+
+برای ذخیره این چنل: /save
+برای بازگشت به منو: /menu`);
       state.userStates[chatId] = { step: 'idle' };
     } catch (err) {
       await sendMessage(chatId, "❌ خطا: " + err.message);
     }
   }
-  else if (trimmedText === "/groups" || trimmedText === "👥 گروه‌های من") {
+  // ✅ /save - ذخیره چنل
+  else if (trimmedText === "/save") {
+    await sendMessage(chatId, "⚠️ این دستور بعد از فوروارد از چنل کار می‌کنه.");
+  }
+  // ✅ /groups - لیست گروه‌ها
+  else if (trimmedText === "/groups") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید از پنل وب لاگین کنید.");
       return;
@@ -556,38 +567,54 @@ async function handleTextMessage(chatId, text) {
     const groups = await getTgGroups();
 
     if (groups.length === 0) {
-      await sendMessage(chatId, "❌ هیچ گروهی یافت نشد.", mainMenu);
+      await sendMessage(chatId, "❌ هیچ گروهی یافت نشد.");
       return;
     }
 
     let msg = "👥 گروه‌هایی که ادمین هستید:\n\n";
-    const kb = [];
     
     groups.forEach((gr, i) => {
       msg += `${i + 1}. ${gr.title}\n`;
-      kb.push([`/gr${i + 1}`]);
+      msg += `   برای انتخاب: /gr${i + 1}\n\n`;
     });
     
-    kb.push(["🏠 منوی اصلی"]);
+    msg += "💡 یکی از دستورات بالا را بزنید.";
     
-    await sendMessage(chatId, msg, kb);
+    await sendMessage(chatId, msg);
   }
-  else if (trimmedText === "/bot" || trimmedText === "🤖 استارت ربات") {
+  // ✅ /bot - استارت ربات تلگرامی
+  else if (trimmedText === "/bot") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید از پنل وب لاگین کنید.");
       return;
     }
 
     state.userStates[chatId] = { step: 'waiting_for_bot_username' };
-    await sendMessage(chatId, "🤖 آیدی ربات تلگرامی را ارسال کنید:", backMenu);
+    await sendMessage(chatId, "🤖 آیدی ربات تلگرامی را ارسال کنید:\n(مثال: @BotFather یا BotFather)");
   }
   else if (userState.step === 'waiting_for_bot_username') {
     const botUsername = trimmedText.replace('@', '');
     await startTgBot(chatId, botUsername);
     state.userStates[chatId] = { step: 'idle' };
   }
+  // ✅ /saved - چنل‌های ذخیره شده
+  else if (trimmedText === "/saved") {
+    if (state.savedChannels.length === 0) {
+      await sendMessage(chatId, "💾 لیست چنل‌های ذخیره شده خالی است.");
+      return;
+    }
+
+    let msg = "💾 چنل‌های ذخیره شده:\n\n";
+    state.savedChannels.forEach((ch, i) => {
+      msg += `${i + 1}. ${ch.name}\n`;
+      msg += `   لینک: ${ch.link}\n\n`;
+    });
+
+    await sendMessage(chatId, msg);
+  }
+  // ❌ دستور نامعتبر
   else {
-    await sendMessage(chatId, "❓ دستور نامعتبر.\n\n/start برای منوی اصلی", mainMenu);
+    await sendMessage(chatId, "❓ دستور نامعتبر.\n\n/start برای مشاهده راهنما");
   }
 }
 
@@ -600,7 +627,7 @@ function extractMessageFromUpdate(update) {
 }
 
 // ----------------------------------------------------------------------------
-// حلقه‌ی Polling
+// حلقه‌ی Polling - بهینه شده برای سرعت
 // ----------------------------------------------------------------------------
 async function pollOnce() {
   try {
@@ -622,7 +649,7 @@ async function pollOnce() {
     log("error", "خطا در getUpdates:", err.message);
     state.lastError = err.message;
   } finally {
-    if (state.running) state.pollTimeout = setTimeout(pollOnce, 3000);
+    if (state.running) state.pollTimeout = setTimeout(pollOnce, 2000); // ✅ کاهش به 2 ثانیه
   }
 }
 
@@ -633,23 +660,6 @@ const app = express();
 app.use(express.json());
 
 app.get("/", (req, res) => res.setHeader("Content-Type", "text/html; charset=utf-8").send(renderAdminPage()));
-
-// ✅ API جدید: نمایش تنظیمات فعلی (برای دیباگ)
-app.get("/api/debug", (req, res) => {
-  res.json({
-    config: {
-      hasRubikaToken: !!config.rubikaToken,
-      tgApiId: config.tgApiId || 'خالی',
-      hasTgApiHash: !!config.tgApiHash,
-      tgPhone: config.tgPhone || 'خالی'
-    },
-    state: {
-      isTgLoggedIn: state.isTgLoggedIn,
-      tgClientExists: !!state.tgClient,
-      codeSent: state.codeSent
-    }
-  });
-});
 
 app.get("/api/status", (req, res) => {
   res.json({
@@ -667,27 +677,12 @@ app.get("/api/status", (req, res) => {
 app.post("/api/config", (req, res) => {
   const { rubikaToken, tgApiId, tgApiHash, tgPhone } = req.body || {};
   
-  log("info", "دریافت تنظیمات:", {
-    hasToken: !!rubikaToken,
-    apiId: tgApiId,
-    hasHash: !!tgApiHash,
-    phone: tgPhone
-  });
-  
-  // ✅ آپدیت مستقیم config
   if (rubikaToken !== undefined) config.rubikaToken = rubikaToken.trim();
   if (tgApiId !== undefined) config.tgApiId = tgApiId.trim();
   if (tgApiHash !== undefined) config.tgApiHash = tgApiHash.trim();
   if (tgPhone !== undefined) config.tgPhone = tgPhone.trim();
   
   const saved = saveConfig();
-  
-  log("info", "تنظیمات نهایی:", {
-    hasToken: !!config.rubikaToken,
-    apiId: config.tgApiId,
-    hasHash: !!config.tgApiHash,
-    phone: config.tgPhone
-  });
   
   res.json({ 
     ok: saved, 
@@ -707,20 +702,10 @@ app.post("/api/send-code", async (req, res) => {
       return res.status(400).json({ success: false, message: "شماره تلفن الزامی است" });
     }
     
-    log("info", "درخواست ارسال کد:", {
-      phone,
-      configApiId: config.tgApiId,
-      hasApiHash: !!config.tgApiHash
-    });
-    
     if (!config.tgApiId || !config.tgApiHash) {
       return res.status(400).json({ 
         success: false, 
-        message: "ابتدا API ID و API Hash را وارد و ذخیره کنید",
-        debug: {
-          apiId: config.tgApiId || 'خالی',
-          hasHash: !!config.tgApiHash
-        }
+        message: "ابتدا API ID و API Hash را وارد و ذخیره کنید"
       });
     }
     
@@ -761,7 +746,6 @@ app.post("/api/start", async (req, res) => {
     
     state.running = true;
     state.messageCount = 0;
-    log("info", "ربات شروع به کار کرد.");
     pollOnce();
     
     res.json({ ok: true, message: "ربات راه‌اندازی شد." });
@@ -774,11 +758,10 @@ app.post("/api/start", async (req, res) => {
 app.post("/api/stop", (req, res) => {
   state.running = false;
   if (state.pollTimeout) clearTimeout(state.pollTimeout);
-  log("info", "ربات متوقف شد.");
   res.json({ ok: true, message: "ربات متوقف شد." });
 });
 
-app.listen(PORT, () => log("info", `پنل روی http://localhost:${PORT} اجراست.`));
+app.listen(PORT, () => console.log(`پنل روی پورت ${PORT} اجراست.`));
 
 // ----------------------------------------------------------------------------
 // رندر HTML پنل مدیریت
@@ -896,8 +879,6 @@ function renderAdminPage() {
         tgApiHash: document.getElementById('tgApiHash').value
       };
       
-      console.log('ارسال تنظیمات:', data);
-      
       const res = await fetch('/api/config', {
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
@@ -905,11 +886,8 @@ function renderAdminPage() {
       });
       const result = await res.json();
       
-      console.log('پاسخ سرور:', result);
-      
       showToast(result.message, result.ok);
       
-      // ✅ نمایش اطلاعات دیباگ
       if (result.debug) {
         document.getElementById('debugInfo').innerHTML = \`
           <div>✅ توکن: \${result.debug.hasToken ? 'دارد' : 'ندارد'}</div>
@@ -920,7 +898,6 @@ function renderAdminPage() {
       
       refreshStatus();
     } catch (e) { 
-      console.error('خطا:', e);
       showToast('خطا: ' + e.message, false); 
     }
   }
@@ -939,8 +916,6 @@ function renderAdminPage() {
       });
       const data = await res.json();
       
-      console.log('پاسخ send-code:', data);
-      
       if (data.success) {
         showToast('✅ کد ارسال شد! تلگرام را چک کنید', true);
         document.getElementById('loginStep1').classList.add('hidden');
@@ -948,14 +923,8 @@ function renderAdminPage() {
         document.getElementById('tgCode').focus();
       } else {
         showToast('❌ خطا: ' + data.message, false);
-        if (data.debug) {
-          console.error('اطلاعات دیباگ:', data.debug);
-        }
       }
-    } catch (e) { 
-      console.error('خطا:', e);
-      showToast('خطا: ' + e.message, false); 
-    }
+    } catch (e) { showToast('خطا: ' + e.message, false); }
   }
 
   async function resendCode() {
@@ -1077,4 +1046,4 @@ function renderAdminPage() {
 </script>
 </body>
 </html>`;
-}
+            }
