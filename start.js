@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات پیشرفته روبیکا - نسخه با لاگین واضح در پنل وب
+//  ربات پیشرفته روبیکا - نسخه اصلاح‌شده بدون ارور sendCode
 // ============================================================================
 
 import express from "express";
@@ -44,7 +44,7 @@ const state = {
   tgConnecting: false,
   channelListeners: new Map(),
   savedChannels: [],
-  codeSent: false // ✅ وضعیت ارسال کد
+  codeSent: false
 };
 
 let config = {
@@ -140,12 +140,11 @@ async function sendMediaToRubika(chatId, buffer, type, caption = "") {
 }
 
 // ----------------------------------------------------------------------------
-// مدیریت کلاینت تلگرام
+// ✅ اصلاح شده: مدیریت کلاینت تلگرام با چک کامل
 // ----------------------------------------------------------------------------
 async function initTgClient() {
   if (!config.tgApiId || !config.tgApiHash) {
-    log("warn", "تنظیمات تلگرام کامل نیست");
-    return false;
+    throw new Error("تنظیمات تلگرام (API ID و API Hash) کامل نیست. لطفاً ابتدا تنظیمات را ذخیره کنید.");
   }
   
   state.tgConnecting = true;
@@ -168,45 +167,72 @@ async function initTgClient() {
     state.isTgLoggedIn = await state.tgClient.isUserAuthorized();
     state.tgConnecting = false;
     log("info", `وضعیت تلگرام: ${state.isTgLoggedIn ? 'متصل' : 'نیاز به لاگین'}`);
-    return state.isTgLoggedIn;
+    return true;
   } catch (err) {
     state.tgConnecting = false;
+    state.tgClient = null;
     log("error", "خطا در اتصال به تلگرام:", err.message);
-    state.isTgLoggedIn = false;
-    return false;
+    throw err;
   }
+}
+
+// ✅ تابع جدید: اطمینان از وجود کلاینت
+async function ensureTgClient() {
+  if (!state.tgClient) {
+    log("info", "کلاینت تلگرام وجود ندارد، در حال ساخت...");
+    await initTgClient();
+  }
+  
+  if (!state.tgClient) {
+    throw new Error("کلاینت تلگرام ساخته نشد. لطفاً تنظیمات را بررسی کنید.");
+  }
+  
+  return state.tgClient;
 }
 
 async function sendTgCodeFromWeb(phone) {
   try {
-    if (!state.tgClient) {
-      await initTgClient();
-    }
+    // ✅ اطمینان از وجود کلاینت
+    const client = await ensureTgClient();
     
-    const result = await state.tgClient.sendCode(
+    log("info", `ارسال کد به شماره: ${phone}`);
+    const result = await client.sendCode(
       { apiId: parseInt(config.tgApiId), apiHash: config.tgApiHash }, 
       phone
     );
+    
     state.tgPhoneCodeHash = result.phoneCodeHash;
-    state.codeSent = true; // ✅ علامت بزن کد ارسال شده
+    state.codeSent = true;
+    log("info", "کد با موفقیت ارسال شد");
     return { success: true, message: "کد ارسال شد" };
   } catch (err) {
+    log("error", "خطا در ارسال کد:", err.message);
     return { success: false, message: err.message };
   }
 }
 
 async function verifyTgCodeFromWeb(code) {
   try {
-    await state.tgClient.invoke(new Api.auth.SignIn({
+    const client = await ensureTgClient();
+    
+    if (!state.tgPhoneCodeHash) {
+      return { success: false, message: "ابتدا کد را ارسال کنید" };
+    }
+    
+    log("info", "تایید کد...");
+    await client.invoke(new Api.auth.SignIn({
       phoneNumber: config.tgPhone,
       phoneCodeHash: state.tgPhoneCodeHash,
       phoneCode: code
     }));
+    
     state.isTgLoggedIn = true;
     state.codeSent = false;
     saveTgSession();
+    log("info", "لاگین موفقیت‌آمیز بود");
     return { success: true, message: "لاگین موفق" };
   } catch (err) {
+    log("error", "خطا در تایید کد:", err.message);
     return { success: false, message: err.message };
   }
 }
@@ -216,7 +242,8 @@ async function verifyTgCodeFromWeb(code) {
 // ----------------------------------------------------------------------------
 async function getTgChannels() {
   try {
-    const dialogs = await state.tgClient.getDialogs({});
+    const client = await ensureTgClient();
+    const dialogs = await client.getDialogs({});
     const channels = [];
     
     for (const dialog of dialogs) {
@@ -239,7 +266,8 @@ async function getTgChannels() {
 
 async function getTgGroups() {
   try {
-    const dialogs = await state.tgClient.getDialogs({});
+    const client = await ensureTgClient();
+    const dialogs = await client.getDialogs({});
     const groups = [];
     
     for (const dialog of dialogs) {
@@ -354,9 +382,10 @@ function startChannelListener(chatId, tgChannel, rubikaChannelId) {
 // ----------------------------------------------------------------------------
 async function startTgBot(chatId, botUsername) {
   try {
-    const entity = await state.tgClient.getEntity(botUsername);
+    const client = await ensureTgClient();
+    const entity = await client.getEntity(botUsername);
     
-    await state.tgClient.invoke(new Api.messages.StartBot({
+    await client.invoke(new Api.messages.StartBot({
       bot: entity,
       randomId: Math.floor(Math.random() * 1000000),
       startParam: 'start'
@@ -365,7 +394,7 @@ async function startTgBot(chatId, botUsername) {
     await sendMessage(chatId, `✅ ربات @${botUsername} استارت شد!`);
 
     setTimeout(async () => {
-      const messages = await state.tgClient.getMessages(entity, { limit: 5 });
+      const messages = await client.getMessages(entity, { limit: 5 });
       
       if (messages.length > 0) {
         const lastMsg = messages[0];
@@ -583,7 +612,7 @@ app.get("/api/status", (req, res) => {
     hasTgConfig: Boolean(config.tgApiId && config.tgApiHash && config.tgPhone),
     isTgLoggedIn: state.isTgLoggedIn, 
     tgConnecting: state.tgConnecting,
-    codeSent: state.codeSent // ✅ ارسال وضعیت کد
+    codeSent: state.codeSent
   });
 });
 
@@ -600,7 +629,12 @@ app.post("/api/send-code", async (req, res) => {
   try {
     const { phone } = req.body;
     if (!phone) {
-      return res.status(400).json({ ok: false, message: "شماره تلفن الزامی است" });
+      return res.status(400).json({ success: false, message: "شماره تلفن الزامی است" });
+    }
+    
+    // ✅ چک کن تنظیمات تلگرام کامل باشه
+    if (!config.tgApiId || !config.tgApiHash) {
+      return res.status(400).json({ success: false, message: "ابتدا API ID و API Hash را وارد و ذخیره کنید" });
     }
     
     config.tgPhone = phone.trim();
@@ -609,7 +643,8 @@ app.post("/api/send-code", async (req, res) => {
     const result = await sendTgCodeFromWeb(phone);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ ok: false, message: err.message });
+    log("error", "خطا در send-code:", err.message);
+    res.status(400).json({ success: false, message: err.message });
   }
 });
 
@@ -617,13 +652,14 @@ app.post("/api/verify-code", async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) {
-      return res.status(400).json({ ok: false, message: "کد الزامی است" });
+      return res.status(400).json({ success: false, message: "کد الزامی است" });
     }
     
     const result = await verifyTgCodeFromWeb(code);
     res.json(result);
   } catch (err) {
-    res.status(400).json({ ok: false, message: err.message });
+    log("error", "خطا در verify-code:", err.message);
+    res.status(400).json({ success: false, message: err.message });
   }
 });
 
@@ -658,7 +694,7 @@ app.post("/api/stop", (req, res) => {
 app.listen(PORT, () => log("info", `پنل روی http://localhost:${PORT} اجراست.`));
 
 // ----------------------------------------------------------------------------
-// رندر HTML پنل مدیریت - ✅ نسخه با UI واضح
+// رندر HTML پنل مدیریت
 // ----------------------------------------------------------------------------
 function renderAdminPage() {
   return `<!DOCTYPE html>
@@ -795,7 +831,6 @@ function renderAdminPage() {
       
       if (data.success) {
         showToast('✅ کد ارسال شد! تلگرام را چک کنید', true);
-        // ✅ خودکار فرم کد رو نشون بده
         document.getElementById('loginStep1').classList.add('hidden');
         document.getElementById('loginStep2').classList.remove('hidden');
         document.getElementById('tgCode').focus();
@@ -895,7 +930,6 @@ function renderAdminPage() {
         <div><span>وضعیت تلگرام</span>\${tgStatus}</div>
       \`;
 
-      // ✅ اگر متصل شده، فرم لاگین رو عوض کن
       if (s.isTgLoggedIn) {
         document.getElementById('loginCard').innerHTML = \`
           <h2>✅ تلگرام متصل است</h2>
@@ -903,7 +937,6 @@ function renderAdminPage() {
           <button class="btn-danger" onclick="logout()" style="width:100%">🚪 خروج از تلگرام</button>
         \`;
       } 
-      // ✅ اگر کد ارسال شده، فرم کد رو نشون بده
       else if (s.codeSent) {
         document.getElementById('loginStep1').classList.add('hidden');
         document.getElementById('loginStep2').classList.remove('hidden');
