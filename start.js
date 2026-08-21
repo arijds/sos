@@ -1,5 +1,5 @@
 // ============================================================================
-//  ربات دانلودر تلگرام برای روبیکا  —  نسخه بدون timeout
+//  ربات دانلودر تلگرام برای روبیکا  —  نسخه نهایی با دکمه و دانلود بهتر
 // ============================================================================
 
 import express from "express";
@@ -42,7 +42,7 @@ const state = {
   tgPhoneCodeHash: null,
   userStates: {},
   savedChannels: [],
-  tgConnecting: false // وضعیت اتصال تلگرام
+  tgConnecting: false
 };
 
 let config = {
@@ -96,26 +96,47 @@ async function rubikaCall(method, body = {}, token = config.rubikaToken) {
   }
 }
 
-async function sendMessage(chatId, text) {
-  return rubikaCall("sendMessage", { chat_id: String(chatId), text });
+async function sendMessage(chatId, text, keyboard = null) {
+  const body = { chat_id: String(chatId), text };
+  if (keyboard && keyboard.length > 0) {
+    body.reply_markup = JSON.stringify({ 
+      keyboard: keyboard,
+      resize_keyboard: true,
+      one_time_keyboard: false
+    });
+  }
+  return rubikaCall("sendMessage", body);
 }
 
 async function sendMediaToRubika(chatId, buffer, type, caption = "") {
-  const form = new FormData();
-  form.append('chat_id', String(chatId));
-  if (type === 'photo') {
-    form.append('photo', buffer, { filename: 'image.jpg', contentType: 'image/jpeg' });
-  } else {
-    form.append('document', buffer, { filename: 'file', contentType: 'application/octet-stream' });
-  }
-  if (caption) form.append('caption', caption.substring(0, 1000));
+  try {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    
+    if (type === 'photo') {
+      form.append('photo', buffer, { filename: 'image.jpg', contentType: 'image/jpeg' });
+    } else {
+      form.append('document', buffer, { filename: 'file', contentType: 'application/octet-stream' });
+    }
+    
+    if (caption) form.append('caption', caption.substring(0, 1000));
 
-  const url = `${RUBIKA_BASE_URL}/${config.rubikaToken}/send${type === 'photo' ? 'Photo' : 'Document'}`;
-  await axios.post(url, form, { headers: form.getHeaders(), maxBodyLength: Infinity, maxContentLength: Infinity, timeout: 60000 });
+    const url = `${RUBIKA_BASE_URL}/${config.rubikaToken}/send${type === 'photo' ? 'Photo' : 'Document'}`;
+    await axios.post(url, form, { 
+      headers: form.getHeaders(), 
+      maxBodyLength: Infinity, 
+      maxContentLength: Infinity, 
+      timeout: 60000 
+    });
+    return true;
+  } catch (err) {
+    log("error", `خطا در ارسال ${type}:`, err.message);
+    return false;
+  }
 }
 
 // ----------------------------------------------------------------------------
-// مدیریت کلاینت تلگرام (بدون timeout)
+// مدیریت کلاینت تلگرام
 // ----------------------------------------------------------------------------
 async function initTgClient() {
   if (!config.tgApiId || !config.tgApiHash) {
@@ -136,7 +157,7 @@ async function initTgClient() {
       new StringSession(sessionStr), 
       parseInt(config.tgApiId), 
       config.tgApiHash, 
-      { connectionRetries: 3, timeout: 10 } // کاهش timeout
+      { connectionRetries: 3, timeout: 10 }
     );
     
     await state.tgClient.connect();
@@ -180,7 +201,34 @@ async function verifyTgCode(chatId, code) {
 }
 
 // ----------------------------------------------------------------------------
-// منطق دانلود از تلگرام
+// دانلود بهتر مدیا از تلگرام
+// ----------------------------------------------------------------------------
+async function downloadMediaFromTg(msg) {
+  try {
+    // روش 1: دانلود مستقیم
+    const buffer = await state.tgClient.downloadMedia(msg, {
+      workers: 1,
+      progressCallback: () => {}
+    });
+    
+    if (buffer && Buffer.isBuffer(buffer)) {
+      return buffer;
+    }
+    
+    // روش 2: اگر buffer نبود، تبدیل به buffer
+    if (buffer) {
+      return Buffer.from(buffer);
+    }
+    
+    return null;
+  } catch (err) {
+    log("error", "خطا در دانلود مدیا:", err.message);
+    return null;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// منطق دانلود از تلگرام (از آخر به اول)
 // ----------------------------------------------------------------------------
 async function fetchAndSend(chatId, channelLink, count, isFast) {
   try {
@@ -188,31 +236,61 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
     const entity = await state.tgClient.getEntity(username);
     
     await sendMessage(chatId, `⏳ در حال دریافت ${count} پیام از ${entity.title}...`);
-    const messages = await state.tgClient.getMessages(entity, { limit: count });
+    let messages = await state.tgClient.getMessages(entity, { limit: count });
 
     if (messages.length === 0) {
       await sendMessage(chatId, "❌ پیامی یافت نشد.");
       return;
     }
 
+    // ✅ معکوس کردن ترتیب پیام‌ها (از آخر به اول)
+    messages = messages.reverse();
+
+    await sendMessage(chatId, `📥 شروع ارسال ${messages.length} پیام (از جدیدترین به قدیمی‌ترین)...`);
+
+    let successCount = 0;
+    let failCount = 0;
+
     for (const msg of messages) {
       const caption = msg.message || '';
+      let sent = false;
+
       try {
         if (msg.photo) {
-          const buffer = Buffer.from(await state.tgClient.downloadMedia(msg, {}));
-          await sendMediaToRubika(chatId, buffer, 'photo', caption);
+          const buffer = await downloadMediaFromTg(msg);
+          if (buffer) {
+            sent = await sendMediaToRubika(chatId, buffer, 'photo', caption);
+          }
         } else if (msg.document) {
-          const buffer = Buffer.from(await state.tgClient.downloadMedia(msg, {}));
-          await sendMediaToRubika(chatId, buffer, 'document', caption);
+          const buffer = await downloadMediaFromTg(msg);
+          if (buffer) {
+            sent = await sendMediaToRubika(chatId, buffer, 'document', caption);
+          }
+        } else if (msg.video) {
+          const buffer = await downloadMediaFromTg(msg);
+          if (buffer) {
+            sent = await sendMediaToRubika(chatId, buffer, 'document', caption);
+          }
         } else if (caption) {
           await sendMessage(chatId, caption);
+          sent = true;
         }
-      } catch (mediaErr) {
-        if (caption) await sendMessage(chatId, `⚠️ خطا در دانلود مدیا، متن پیام:\n${caption}`);
+
+        if (sent) successCount++;
+        else failCount++;
+      } catch (err) {
+        log("error", `خطا در ارسال پیام ${msg.id}:`, err.message);
+        failCount++;
+        if (caption) {
+          await sendMessage(chatId, `⚠️ [متن پیام]:\n${caption}`);
+        }
       }
+
+      // تاخیر کوتاه برای جلوگیری از rate limit
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    await sendMessage(chatId, "✅ ارسال پیام‌ها تمام شد!");
+    await sendMessage(chatId, `✅ ارسال پیام‌ها تمام شد!\n\n✅ موفق: ${successCount}\n❌ ناموفق: ${failCount}`);
     
     if (!isFast) {
       state.userStates[chatId] = { step: 'ask_save', link: channelLink, name: entity.title };
@@ -224,13 +302,22 @@ async function fetchAndSend(chatId, channelLink, count, isFast) {
 }
 
 // ----------------------------------------------------------------------------
-// مدیریت دستورات
+// مدیریت دستورات با دکمه
 // ----------------------------------------------------------------------------
 async function handleTextMessage(chatId, text) {
   const userState = state.userStates[chatId];
   const trimmedText = text.trim();
 
-  if (trimmedText === "/start") {
+  // منوی اصلی
+  const mainMenu = [
+    ["🔍 جستجو در چنل"],
+    ["⚡ دانلود سریع"],
+    ["💾 چنل‌های ذخیره شده"]
+  ];
+
+  const backMenu = [["🏠 منوی اصلی"]];
+
+  if (trimmedText === "/start" || trimmedText === "🏠 منوی اصلی") {
     if (!state.isTgLoggedIn) {
       if (state.tgConnecting) {
         await sendMessage(chatId, "⏳ در حال اتصال به تلگرام...\nلطفاً چند لحظه صبر کنید و دوباره /start را بفرستید.");
@@ -239,53 +326,57 @@ async function handleTextMessage(chatId, text) {
         await sendTgCode(chatId);
       }
     } else {
-      await sendMessage(chatId, "👋 خوش آمدید!\n\n📋 دستورات موجود:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع همه پیام‌ها\n/saved - چنل‌های ذخیره شده\n/menu - بازگشت به منو");
+      delete state.userStates[chatId];
+      await sendMessage(chatId, "👋 خوش آمدید!\n\nاز دکمه‌های زیر یا دستورات استفاده کنید:", mainMenu);
     }
   }
   else if (trimmedText === "/menu") {
     delete state.userStates[chatId];
-    await sendMessage(chatId, "🏠 منوی اصلی:\n\n/start - منوی اصلی\n/search - جستجو در چنل\n/fast - دانلود سریع\n/saved - چنل‌های ذخیره شده");
+    await sendMessage(chatId, "🏠 منوی اصلی:", mainMenu);
   }
-  else if (trimmedText === "/search") {
+  else if (trimmedText === "/search" || trimmedText === "🔍 جستجو در چنل") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
       return;
     }
     state.userStates[chatId] = { step: 'waiting_for_link', action: 'search' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)\n\n/menu برای بازگشت");
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را ارسال کنید:\n(مثال: https://t.me/durov)", backMenu);
   }
-  else if (trimmedText === "/fast") {
+  else if (trimmedText === "/fast" || trimmedText === "⚡ دانلود سریع") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
       return;
     }
     state.userStates[chatId] = { step: 'waiting_for_link', action: 'fast' };
-    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:\n\n/menu برای بازگشت");
+    await sendMessage(chatId, "🔗 لینک چنل تلگرام را برای دانلود سریع ارسال کنید:", backMenu);
   }
-  else if (trimmedText === "/saved") {
+  else if (trimmedText === "/saved" || trimmedText === "💾 چنل‌های ذخیره شده") {
     if (!state.isTgLoggedIn) {
       await sendMessage(chatId, "❌ ابتدا باید لاگین کنید.\n/start را بفرستید.");
       return;
     }
     if (state.savedChannels.length === 0) {
-      await sendMessage(chatId, "💾 لیست چنل‌های ذخیره شده خالی است.\n\n/menu برای بازگشت");
+      await sendMessage(chatId, "💾 لیست چنل‌های ذخیره شده خالی است.", mainMenu);
       return;
     }
     let msgText = "💾 چنل‌های ذخیره شده:\n\n";
+    const kb = [];
     state.savedChannels.forEach((ch, i) => {
-      msgText += `${i + 1}. ${ch.name}\n   لینک: ${ch.link}\n\n`;
+      msgText += `${i + 1}. ${ch.name}\n`;
+      kb.push([`📥 ${ch.name}`]);
     });
-    msgText += "برای جستجو در هر چنل، لینک آن را کپی و ارسال کنید.\n\n/menu برای بازگشت";
-    await sendMessage(chatId, msgText);
+    kb.push(["🏠 منوی اصلی"]);
+    state.userStates[chatId] = { step: 'showing_saved' };
+    await sendMessage(chatId, msgText, kb);
   }
   else if (trimmedText === "/save") {
     if (userState?.step === 'ask_save') {
       if (!state.savedChannels.find(c => c.link === userState.link)) {
         state.savedChannels.push({ link: userState.link, name: userState.name });
         saveData();
-        await sendMessage(chatId, "✅ چنل ذخیره شد!\n\n/menu برای بازگشت به منو");
+        await sendMessage(chatId, "✅ چنل ذخیره شد!", mainMenu);
       } else {
-        await sendMessage(chatId, "⚠️ این چنل قبلاً ذخیره شده.\n\n/menu برای بازگشت");
+        await sendMessage(chatId, "⚠️ این چنل قبلاً ذخیره شده.", mainMenu);
       }
       delete state.userStates[chatId];
     } else {
@@ -300,23 +391,31 @@ async function handleTextMessage(chatId, text) {
     if (userState.action === 'fast') {
       delete state.userStates[chatId];
       await fetchAndSend(chatId, userState.link, 50, true);
-      await sendMessage(chatId, "\n/menu برای بازگشت به منو");
+      await sendMessage(chatId, "\nمنوی اصلی:", mainMenu);
     } else {
       userState.step = 'waiting_for_count';
-      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)\n\n/menu برای بازگشت");
+      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (مثلاً 10)", backMenu);
     }
   }
   else if (userState?.step === 'waiting_for_count') {
     const count = parseInt(trimmedText);
     if (isNaN(count) || count < 1) {
-      await sendMessage(chatId, "❌ عدد معتبر وارد کنید.\n\n/menu برای بازگشت");
+      await sendMessage(chatId, "❌ عدد معتبر وارد کنید.", backMenu);
       return;
     }
     delete state.userStates[chatId];
     await fetchAndSend(chatId, userState.link, count, false);
   }
+  else if (userState?.step === 'showing_saved') {
+    const chName = trimmedText.replace("📥 ", "");
+    const ch = state.savedChannels.find(c => c.name === chName);
+    if (ch) {
+      state.userStates[chatId] = { step: 'waiting_for_count', link: ch.link };
+      await sendMessage(chatId, "🔢 چند تا از آخرین پیام‌ها رو بفرستم؟ (عدد بفرست)", backMenu);
+    }
+  }
   else {
-    await sendMessage(chatId, "❓ دستور نامعتبر.\n\n/start برای مشاهده دستورات");
+    await sendMessage(chatId, "❓ دستور نامعتبر.\n\n/start برای مشاهده دستورات", mainMenu);
   }
 }
 
@@ -386,7 +485,6 @@ app.post("/api/config", (req, res) => {
   res.json({ ok: saveConfig(), message: "تنظیمات ذخیره شد." });
 });
 
-// ✅ اصلاح شده: شروع سریع بدون timeout
 app.post("/api/start", async (req, res) => {
   try {
     if (state.running) {
@@ -396,7 +494,6 @@ app.post("/api/start", async (req, res) => {
       return res.status(400).json({ ok: false, message: "ابتدا توکن ربات روبیکا را وارد کنید." });
     }
     
-    // بررسی سریع توکن روبیکا
     try {
       const meRes = await rubikaCall("getMe", {});
       state.botInfo = meRes?.data?.bot || meRes?.bot || null;
@@ -404,20 +501,17 @@ app.post("/api/start", async (req, res) => {
       return res.status(400).json({ ok: false, message: "توکن روبیکا نامعتبر است: " + err.message });
     }
     
-    // شروع ربات
     state.running = true;
     state.messageCount = 0;
     log("info", "ربات شروع به کار کرد.");
     pollOnce();
     
-    // اتصال تلگرام در پس‌زمینه (بدون منتظر ماندن)
     initTgClient().then(() => {
       log("info", "اتصال تلگرام در پس‌زمینه کامل شد");
     }).catch(err => {
       log("error", "خطا در اتصال تلگرام:", err.message);
     });
     
-    // پاسخ سریع
     res.json({ ok: true, message: "ربات راه‌اندازی شد. اتصال تلگرام در پس‌زمینه در حال انجام است." });
   } catch (err) {
     log("error", "خطا در راه‌اندازی:", err.message);
@@ -519,14 +613,14 @@ function renderAdminPage() {
   </div>
 
   <div class="card">
-    <h2>دستورات ربات در روبیکا</h2>
+    <h2>دستورات و دکمه‌های ربات</h2>
     <div class="commands">
-      <div><strong>/start</strong> - منوی اصلی و شروع کار</div>
-      <div><strong>/search</strong> - جستجو در چنل تلگرام</div>
-      <div><strong>/fast</strong> - دانلود سریع همه پیام‌ها</div>
-      <div><strong>/saved</strong> - مشاهده چنل‌های ذخیره شده</div>
+      <div><strong>/start</strong> یا <strong>🏠 منوی اصلی</strong> - منوی اصلی</div>
+      <div><strong>/search</strong> یا <strong>🔍 جستجو در چنل</strong> - جستجو</div>
+      <div><strong>/fast</strong> یا <strong>⚡ دانلود سریع</strong> - دانلود سریع</div>
+      <div><strong>/saved</strong> یا <strong>💾 چنل‌های ذخیره شده</strong> - لیست ذخیره‌ها</div>
       <div><strong>/save</strong> - ذخیره چنل فعلی</div>
-      <div><strong>/menu</strong> - بازگشت به منوی اصلی</div>
+      <div><strong>/menu</strong> - بازگشت به منو</div>
     </div>
   </div>
 </div>
