@@ -440,7 +440,35 @@ async function clickRelayButton(chatId, cmd) {
 }
 
 // ----------------------------------------------------------------------------
-// ✅ ثبت خودکار کانال/گروه‌هایی که این بات روبیکا ادمینشونه
+// ✅ شناسایی خودکار نوع چت (کانال/گروه/خصوصی) از روی هر پیام دریافتی.
+// این روش مطمئن‌تر از رویداد StartedBot هست چون به هیچ رویداد خاصی وابسته نیست:
+// همین که بات یه پیام از یه چت جدید ببینه (مثلاً چون توش ادمینه و پیام دید)،
+// یه بار getChat می‌زنیم و اگه کانال/گروه بود ثبتش می‌کنیم.
+// ----------------------------------------------------------------------------
+const checkedChatIds = new Set();
+async function ensureChatRegistered(chatId) {
+  chatId = String(chatId);
+  if (checkedChatIds.has(chatId)) return;
+  checkedChatIds.add(chatId);
+  if (state.rubikaChats.some((c) => c.chat_id === chatId)) return;
+
+  try {
+    const info = await rubikaCall("getChat", { chat_id: chatId });
+    if (DEBUG_UPDATES) log("info", `getChat(${chatId}):`, JSON.stringify(info));
+    const chat = info?.data?.chat || info?.chat || info?.data || {};
+    const type = chat.type;
+    const title = chat.title || chat.first_name || chatId;
+    if (type === "Group" || type === "Channel") {
+      upsertRubikaChat(chatId, title, type);
+      log("info", `✅ ${type === "Channel" ? "کانال" : "گروه"} جدید شناسایی شد: "${title}"`);
+    }
+  } catch (e) {
+    log("error", `خطا در شناسایی نوع چت ${chatId}:`, e.message);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// ✅ ثبت خودکار کانال/گروه‌هایی که این بات روبیکا ادمینشونه (روش کمکی - رویداد مستقیم)
 // ----------------------------------------------------------------------------
 async function handleBotMembershipUpdate(update) {
   const chatId = String(update.chat_id);
@@ -598,6 +626,8 @@ async function pollOnce() {
 
         const { chatId, text, senderType } = extractMessageFromUpdate(update);
         if (!chatId || senderType === "Bot") continue;
+
+        await ensureChatRegistered(chatId); // شناسایی خودکار کانال/گروه از روی همین پیام
 
         state.messageCount += 1;
         if (text) await handleTextMessage(chatId, text);
@@ -845,4 +875,4 @@ function renderAdminPage() {
 </script>
 </body>
 </html>`;
-                                         }
+  }
